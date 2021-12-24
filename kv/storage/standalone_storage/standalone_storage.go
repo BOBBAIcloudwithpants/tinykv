@@ -62,7 +62,9 @@ func NewStandAloneStorage(conf *config.Config) *StandAloneStorage {
 
 func (s *StandAloneStorage) Start() error {
 	// Your Code Here (1).
-	s.db = engine_util.CreateDB(s.conf.DBPath, s.conf.Raft)
+	if s.db == nil {
+		s.db = engine_util.CreateDB(s.conf.DBPath, s.conf.Raft)
+	}
 	return nil
 }
 
