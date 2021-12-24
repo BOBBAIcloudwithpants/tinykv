@@ -18,15 +18,15 @@ func (server *Server) RawGet(_ context.Context, req *kvrpcpb.RawGetRequest) (*kv
 		res.Error = "storage not initialized"
 		return res, errors.New("storage not initialized")
 	}
-	server.storage.Start()
 	reader, err := server.storage.Reader(req.GetContext())
+	defer reader.Close()
 	if err != nil {
 		res.Error = err.Error()
 		return res, err
 	}
 
 	value, err := reader.GetCF(req.GetCf(), req.GetKey())
-	if err != nil {
+	if err != nil && err.Error() != "Key not found" {
 		res.Error = err.Error()
 		return res, err
 	}
@@ -49,8 +49,6 @@ func (server *Server) RawPut(_ context.Context, req *kvrpcpb.RawPutRequest) (*kv
 		res.Error = "storage not initialized"
 		return res, errors.New("storage not initialized")
 	}
-
-	server.storage.Start()
 
 	var entries []storage.Modify
 	entries = append(entries, storage.Modify{Data: storage.Put{
@@ -79,8 +77,6 @@ func (server *Server) RawDelete(_ context.Context, req *kvrpcpb.RawDeleteRequest
 		return res, errors.New("storage not initialized")
 	}
 
-	server.storage.Start()
-
 	var entries []storage.Modify
 	entries = append(entries, storage.Modify{Data: storage.Delete{
 		Key: req.GetKey(),
@@ -88,7 +84,7 @@ func (server *Server) RawDelete(_ context.Context, req *kvrpcpb.RawDeleteRequest
 	}})
 
 	err := server.storage.Write(req.GetContext(), entries)
-	if err != nil {
+	if err != nil && err.Error() != "Key not found"{
 		res.Error = err.Error()
 		return res, err
 	}
@@ -105,19 +101,20 @@ func (server *Server) RawScan(_ context.Context, req *kvrpcpb.RawScanRequest) (*
 		res.Error = "storage not initialized"
 		return res, errors.New("storage not initialized")
 	}
-	server.storage.Start()
-
 	reader, err := server.storage.Reader(req.GetContext())
+	defer reader.Close()
+
 	if err != nil {
 		res.Error = err.Error()
 		return res, err
 	}
 	it := reader.IterCF(req.GetCf())
+	defer it.Close()
 
 	for it.Seek(req.GetStartKey()); it.Valid(); it.Next() {
-		//if it.Item().Key() == req.Limit {
-		//
-		//}
+		if uint32(len(res.Kvs)) >= req.GetLimit() {
+			break
+		}
 		val, err := it.Item().Value()
 		kvpair := new(kvrpcpb.KvPair)
 		*kvpair = kvrpcpb.KvPair{
@@ -130,6 +127,5 @@ func (server *Server) RawScan(_ context.Context, req *kvrpcpb.RawScanRequest) (*
 		}
 		res.Kvs = append(res.Kvs,kvpair)
 	}
-
 	return res, nil
 }

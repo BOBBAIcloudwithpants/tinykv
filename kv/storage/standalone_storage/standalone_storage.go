@@ -37,7 +37,11 @@ func (sr *StandAloneStorageReader) GetCF(cf string, key []byte)([]byte, error) {
 		log.Fatal("storage is not initialized")
 		return nil, errors.New("db is not initialized")
 	}
-	return engine_util.GetCF(sr.s.db, cf, key)
+	val, err := engine_util.GetCF(sr.s.db, cf, key)
+	if err != nil && err.Error() == "Key not found" {
+		return nil, nil
+	}
+	return val, err
 }
 
 func (sr *StandAloneStorageReader) IterCF(cf string) engine_util.DBIterator {
@@ -50,14 +54,17 @@ func (sr *StandAloneStorageReader) IterCF(cf string) engine_util.DBIterator {
 }
 
 func (sr *StandAloneStorageReader) Close() {
-	sr.tx.Discard()
+	if sr.tx != nil {
+		sr.tx.Discard()
+	}
 }
 
 func NewStandAloneStorage(conf *config.Config) *StandAloneStorage {
 	// Your Code Here (1).
 	s := new(StandAloneStorage)
 	s.conf = *conf
-	return nil
+	s.db = nil
+	return s
 }
 
 func (s *StandAloneStorage) Start() error {
