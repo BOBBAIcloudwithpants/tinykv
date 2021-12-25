@@ -69,6 +69,17 @@ func nodes(r *Raft) []uint64 {
 	return nodes
 }
 
+func winElection(r *Raft) bool {
+	total := len(r.votes)
+	votes := 0
+	for _, v := range(r.votes) {
+		if v {
+			votes++
+		}
+	}
+	return total / votes < 2
+}
+
 func diffu(a, b string) string {
 	if a == b {
 		return ""
