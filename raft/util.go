@@ -131,6 +131,10 @@ func IsLocalMsg(msgt pb.MessageType) bool {
 	return msgt == pb.MessageType_MsgHup || msgt == pb.MessageType_MsgBeat
 }
 
+func IsFromLeader(msgt pb.MessageType) bool {
+	return msgt == pb.MessageType_MsgAppend || msgt == pb.MessageType_MsgHeartbeat
+}
+
 func IsResponseMsg(msgt pb.MessageType) bool {
 	return msgt == pb.MessageType_MsgAppendResponse || msgt == pb.MessageType_MsgRequestVoteResponse || msgt == pb.MessageType_MsgHeartbeatResponse
 }
