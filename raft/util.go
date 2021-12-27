@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"math/rand"
 	"os"
 	"os/exec"
 	"sort"
@@ -72,12 +73,18 @@ func nodes(r *Raft) []uint64 {
 func winElection(r *Raft) bool {
 	total := len(r.votes)
 	votes := 0
-	for _, v := range(r.votes) {
+	for _, v := range r.votes {
 		if v {
 			votes++
 		}
 	}
-	return total / votes < 2
+	//fmt.Printf("票数: %d : %d\n", votes, total)
+	return 2 * votes > total
+}
+
+func produceRandomElectionTerm(min int, max int) int {
+
+	return rand.Intn(max - min) + min
 }
 
 func diffu(a, b string) string {

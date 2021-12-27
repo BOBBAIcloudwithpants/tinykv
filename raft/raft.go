@@ -16,8 +16,9 @@ package raft
 
 import (
 	"errors"
-
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
+	"math/rand"
+	"time"
 )
 
 // None is a placeholder node ID used when there is no leader.
@@ -143,6 +144,8 @@ type Raft struct {
 	// valid message from current leader when it is a follower.
 	electionElapsed int
 
+	randomWaitTime int
+
 	// leadTransferee is id of the leader transfer target when its value is not zero.
 	// Follow the procedure defined in section 3.10 of Raft phd thesis.
 	// (https://web.stanford.edu/~ouster/cgi-bin/papers/OngaroPhD.pdf)
@@ -171,8 +174,14 @@ func newRaft(c *Config) *Raft {
 	for _, p := range c.peers {
 		r.votes[p] = false
 	}
+
+
 	r.heartbeatTimeout = c.HeartbeatTick
 	r.electionTimeout = c.ElectionTick
+
+	rand.Seed(time.Now().UnixNano())
+	r.randomWaitTime = produceRandomElectionTerm(0,r.electionTimeout)
+
 	r.heartbeatElapsed = 0
 	r.electionElapsed = 0
 	r.Lead = 0
@@ -205,7 +214,7 @@ func (r *Raft) sendHeartbeat(to uint64) {
 func (r *Raft) tick() {
 	r.electionElapsed++
 	if r.State == StateFollower {
-		if r.electionElapsed >= r.electionTimeout {
+		if r.electionElapsed >= r.electionTimeout + r.randomWaitTime{
 			// timeout, transfer state into StateCandidate
 			r.Term++
 			r.becomeCandidate()
@@ -226,7 +235,7 @@ func (r *Raft) tick() {
 				Term:    r.Term,
 				From:    r.id,
 			})
-		} else if r.electionElapsed >= r.electionTimeout {
+		} else if r.electionElapsed >= r.randomWaitTime + r.electionTimeout {
 			// current election timeout, retry
 			r.becomeCandidate()
 			r.Step(pb.Message{
@@ -259,7 +268,12 @@ func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	r.State = StateFollower
 	r.Term = term
 	r.Lead = lead
+	r.Vote = 0
 	r.electionElapsed = 0
+
+	rand.Seed(time.Now().UnixNano())
+	r.randomWaitTime = produceRandomElectionTerm(0,r.electionTimeout)
+
 	for k, _ := range r.votes {
 		r.votes[k] = false
 	}
@@ -275,8 +289,11 @@ func (r *Raft) becomeCandidate() {
 	for k, _ := range r.votes {
 		r.votes[k] = false
 	}
-	r.Vote = 1
+	r.Vote = r.id
 	r.votes[r.id] = true
+
+	rand.Seed(time.Now().UnixNano())
+	r.randomWaitTime = produceRandomElectionTerm(0,r.electionTimeout)
 
 	// request for votes
 }
@@ -300,8 +317,25 @@ func (r *Raft) Step(m pb.Message) error {
 	if IsLocalMsg(m.MsgType) {
 		// local message: MsgHup or MsgBeat
 		if m.MsgType == pb.MessageType_MsgHup {
-			// candidate send RequestVote
-			if m.From == r.id {
+			if r.State == StateLeader {
+				// just send Heartbeat
+				r.heartbeatElapsed = 0
+				for k, _ := range r.votes {
+					if k != r.id {
+						r.msgs = append(r.msgs, pb.Message{
+							MsgType: pb.MessageType_MsgHeartbeat,
+							From:    r.id,
+							To:      k,
+							Term:    m.Term,
+						})
+					}
+				}
+			} else {
+				if r.State != StateCandidate {
+					//r.Term++
+					r.becomeCandidate()
+				}
+				// candidate send RequestVote
 				for k, _ := range r.votes {
 					if k != r.id {
 						r.msgs = append(r.msgs, pb.Message{
@@ -311,6 +345,15 @@ func (r *Raft) Step(m pb.Message) error {
 							Term:    m.Term,
 						})
 					}
+				}
+
+				if winElection(r) {
+					r.becomeLeader()
+					r.Step(pb.Message{
+						MsgType: pb.MessageType_MsgBeat,
+						Term:    r.Term,
+						From:    r.id,
+					})
 				}
 			}
 		} else if m.MsgType == pb.MessageType_MsgBeat {
@@ -340,51 +383,97 @@ func (r *Raft) Step(m pb.Message) error {
 		} else {
 			switch r.State {
 			case StateFollower:
-				if m.From == r.id {
-				} else if m.To == r.id {
+				if m.To == r.id {
 					if m.MsgType == pb.MessageType_MsgHeartbeat {
 						r.handleHeartbeat(m)
 					} else if m.MsgType == pb.MessageType_MsgRequestVote {
 						// vote for candidate
-						r.Vote = m.From
-						r.Lead = m.From
+						rej := false
+						if r.Vote != 0 && r.Vote != m.From {
+							rej = true
+						}
+
+						if !rej {
+							r.Vote = m.From
+							r.Term = m.Term
+						}
 						r.electionElapsed = 0
 
 						r.msgs = append(r.msgs, pb.Message{
 							From:    r.id,
 							To:      m.From,
 							MsgType: pb.MessageType_MsgRequestVoteResponse,
-							Reject:  false,
+							Reject:  rej,
 							Term:    r.Term,
 						})
 					}
 				}
 			case StateCandidate:
-				if m.From == r.id {
-
-				} else if m.To == r.id {
+				if m.To == r.id {
 					if m.MsgType == pb.MessageType_MsgRequestVote {
-						// reject other's vote
-						r.msgs = append(r.msgs, pb.Message{
-							MsgType: pb.MessageType_MsgRequestVoteResponse,
-							From:    r.id,
-							To:      m.From,
-							Reject:  true,
-							Term:    r.Term,
-						})
+						if m.Term > r.Term {
+							// become other's follower & vote for others
+							r.becomeFollower(m.Term, m.From)
+							r.Vote = m.From
+							r.msgs = append(r.msgs, pb.Message{
+								MsgType: pb.MessageType_MsgRequestVoteResponse,
+								From:    r.id,
+								To:      m.From,
+								Reject:  false,
+								Term:    m.Term,
+							})
+
+						} else {
+							// reject other's vote
+							r.msgs = append(r.msgs, pb.Message{
+								MsgType: pb.MessageType_MsgRequestVoteResponse,
+								From:    r.id,
+								To:      m.From,
+								Reject:  true,
+								Term:    r.Term,
+							})
+						}
+
 					} else if m.MsgType == pb.MessageType_MsgRequestVoteResponse {
 						// check other's vote
 						if m.Reject == false {
 							r.votes[m.From] = true
+							if winElection(r) {
+								r.becomeLeader()
+								r.Step(pb.Message{
+									MsgType: pb.MessageType_MsgBeat,
+									Term:    r.Term,
+									From:    r.id,
+								})
+							}
 						}
+					} else if m.MsgType == pb.MessageType_MsgHeartbeat {
+						// become follower
+						r.becomeFollower(m.Term, m.From)
+						r.handleHeartbeat(m)
+					} else if m.MsgType == pb.MessageType_MsgAppend {
+						// become follower
+						r.becomeFollower(m.Term, m.From)
+
 					}
 				}
 			case StateLeader:
-				if m.From == r.id {
-
-				} else if m.To == r.id {
+				if m.To == r.id {
 					if m.MsgType == pb.MessageType_MsgHeartbeatResponse {
 						r.electionElapsed = 0
+					} else if m.MsgType == pb.MessageType_MsgRequestVote {
+						if m.Term > r.Term {
+							// become other's follower & vote for others
+							r.becomeFollower(m.Term, m.From)
+							r.Vote = m.From
+							r.msgs = append(r.msgs, pb.Message{
+								MsgType: pb.MessageType_MsgRequestVoteResponse,
+								From:    r.id,
+								To:      m.From,
+								Reject:  false,
+								Term:    m.Term,
+							})
+						}
 					}
 				}
 			}
