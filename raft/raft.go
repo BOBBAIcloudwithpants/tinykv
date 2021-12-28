@@ -216,9 +216,9 @@ func (r *Raft) tick() {
 	if r.State == StateFollower {
 		if r.electionElapsed >= r.electionTimeout + r.randomWaitTime{
 			// timeout, transfer state into StateCandidate
-			r.Term++
+			//r.Term++
 			//fmt.Printf("Term变了tick: id: %d state: %s, %d -> %d\n", r.id, r.State, r.Term, r.Term+1)
-			r.becomeCandidate()
+			//r.becomeCandidate()
 			r.Step(pb.Message{
 				MsgType: pb.MessageType_MsgHup,
 				Term:    r.Term,
@@ -342,8 +342,8 @@ func (r *Raft) Step(m pb.Message) error {
 					}
 				}
 			} else {
+				r.Term++
 				if r.State != StateCandidate {
-					//r.Term++
 					r.becomeCandidate()
 				}
 				// candidate send RequestVote
@@ -369,7 +369,7 @@ func (r *Raft) Step(m pb.Message) error {
 			}
 		} else if m.MsgType == pb.MessageType_MsgBeat {
 			// leader send heartbeats
-			if r.id == m.From {
+			if r.State == StateLeader && r.id == m.From{
 				for k, _ := range r.votes {
 					if k != r.id {
 						r.msgs = append(r.msgs, pb.Message{
@@ -460,9 +460,18 @@ func (r *Raft) Step(m pb.Message) error {
 							}
 						}
 					} else if m.MsgType == pb.MessageType_MsgHeartbeat {
-						// become follower
-						r.becomeFollower(m.Term, m.From)
-						r.handleHeartbeat(m)
+						if m.Term >= r.Term {
+							// become follower
+							r.becomeFollower(m.Term, m.From)
+							r.handleHeartbeat(m)
+						} else {
+							r.msgs = append(r.msgs, pb.Message{
+								Term: r.Term,
+								From: r.id,
+								To: m.From,
+								MsgType: pb.MessageType_MsgAppendResponse,
+							})
+						}
 					} else if m.MsgType == pb.MessageType_MsgAppend {
 						// become follower
 						r.becomeFollower(m.Term, m.From)
@@ -476,6 +485,18 @@ func (r *Raft) Step(m pb.Message) error {
 					} else if m.MsgType == pb.MessageType_MsgRequestVote {
 						if m.Term > r.Term {
 							// become other's follower & vote for others
+							r.becomeFollower(m.Term, m.From)
+							r.Vote = m.From
+							r.msgs = append(r.msgs, pb.Message{
+								MsgType: pb.MessageType_MsgRequestVoteResponse,
+								From:    r.id,
+								To:      m.From,
+								Reject:  false,
+								Term:    m.Term,
+							})
+						}
+					} else if m.MsgType == pb.MessageType_MsgAppendResponse {
+						if m.Term > r.Term {
 							r.becomeFollower(m.Term, m.From)
 							r.Vote = m.From
 							r.msgs = append(r.msgs, pb.Message{
