@@ -217,6 +217,7 @@ func (r *Raft) tick() {
 		if r.electionElapsed >= r.electionTimeout + r.randomWaitTime{
 			// timeout, transfer state into StateCandidate
 			r.Term++
+			//fmt.Printf("Term变了tick: id: %d state: %s, %d -> %d\n", r.id, r.State, r.Term, r.Term+1)
 			r.becomeCandidate()
 			r.Step(pb.Message{
 				MsgType: pb.MessageType_MsgHup,
@@ -226,6 +227,7 @@ func (r *Raft) tick() {
 		}
 	} else if r.State == StateCandidate {
 		if r.Term == 1 {
+			//fmt.Printf("Term变了tick: id: %d state: %s, %d -> %d\n", r.id, r.State, r.Term, r.Term+1)
 			r.Term++
 		}
 		if winElection(r) {
@@ -277,6 +279,9 @@ func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	for k, _ := range r.votes {
 		r.votes[k] = false
 	}
+
+	// clear message
+	r.msgs = make([]pb.Message, 0)
 }
 
 // becomeCandidate transform this peer's state to candidate
@@ -295,7 +300,8 @@ func (r *Raft) becomeCandidate() {
 	rand.Seed(time.Now().UnixNano())
 	r.randomWaitTime = produceRandomElectionTerm(0,r.electionTimeout)
 
-	// request for votes
+	// clear message
+	r.msgs = make([]pb.Message, 0)
 }
 
 // becomeLeader transform this peer's state to leader
@@ -308,12 +314,17 @@ func (r *Raft) becomeLeader() {
 	for k, _ := range r.votes {
 		r.votes[k] = false
 	}
+
+	// clear message
+	r.msgs = make([]pb.Message, 0)
+
 }
 
 // Step the entrance of handle message, see `MessageType`
 // on `eraftpb.proto` for what msgs should be handled
 func (r *Raft) Step(m pb.Message) error {
 	// Your Code Here (2A).
+	//printMsg(&m)
 	if IsLocalMsg(m.MsgType) {
 		// local message: MsgHup or MsgBeat
 		if m.MsgType == pb.MessageType_MsgHup {
@@ -326,7 +337,7 @@ func (r *Raft) Step(m pb.Message) error {
 							MsgType: pb.MessageType_MsgHeartbeat,
 							From:    r.id,
 							To:      k,
-							Term:    m.Term,
+							Term:    r.Term,
 						})
 					}
 				}
@@ -342,7 +353,7 @@ func (r *Raft) Step(m pb.Message) error {
 							MsgType: pb.MessageType_MsgRequestVote,
 							From:    r.id,
 							To:      k,
-							Term:    m.Term,
+							Term:    r.Term,
 						})
 					}
 				}
@@ -394,6 +405,7 @@ func (r *Raft) Step(m pb.Message) error {
 						}
 
 						if !rej {
+							//fmt.Printf("MessageType_MsgRequestVote,从%d到%d, Term变了，id: %d, state: %s, %d -> %d\n",m.From,r.id, r.id, r.State, r.Term, m.Term)
 							r.Vote = m.From
 							r.Term = m.Term
 						}
@@ -493,9 +505,10 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 		From:    r.id,
 		To:      m.From,
 		MsgType: pb.MessageType_MsgHeartbeatResponse,
-		Term:    r.Term,
+		Term:    m.Term,
 	})
 	r.electionElapsed = 0
+	//fmt.Printf("handleHeartbeat,从%d到%d: Term变了，id: %d, state: %s, %d -> %d\n",m.From, r.id, r.id, r.State, r.Term, m.Term)
 	r.Term = m.Term
 }
 

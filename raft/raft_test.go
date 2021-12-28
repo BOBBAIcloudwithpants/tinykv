@@ -799,6 +799,7 @@ func testCandidateResetTerm(t *testing.T, mt pb.MessageType) {
 	// and expects candidate to revert to follower
 	nt.send(pb.Message{From: 1, To: 3, Term: a.Term, MsgType: mt})
 
+
 	if c.State != StateFollower {
 		t.Errorf("state = %s, want %s", c.State, StateFollower)
 	}

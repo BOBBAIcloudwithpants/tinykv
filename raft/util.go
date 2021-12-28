@@ -87,6 +87,10 @@ func produceRandomElectionTerm(min int, max int) int {
 	return rand.Intn(max - min) + min
 }
 
+func printMsg(m *pb.Message) {
+	fmt.Printf("%d->%d, term: %d, type: %s\n", m.From, m.To, m.Term, m.MsgType)
+}
+
 func diffu(a, b string) string {
 	if a == b {
 		return ""
