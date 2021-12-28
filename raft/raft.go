@@ -226,10 +226,6 @@ func (r *Raft) tick() {
 			})
 		}
 	} else if r.State == StateCandidate {
-		if r.Term == 1 {
-			//fmt.Printf("Term变了tick: id: %d state: %s, %d -> %d\n", r.id, r.State, r.Term, r.Term+1)
-			r.Term++
-		}
 		if winElection(r) {
 			r.becomeLeader()
 			r.Step(pb.Message{
@@ -239,7 +235,6 @@ func (r *Raft) tick() {
 			})
 		} else if r.electionElapsed >= r.randomWaitTime + r.electionTimeout {
 			// current election timeout, retry
-			r.becomeCandidate()
 			r.Step(pb.Message{
 				MsgType: pb.MessageType_MsgHup,
 				Term:    r.Term,
