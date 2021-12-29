@@ -186,7 +186,7 @@ func newRaft(c *Config) *Raft {
 	r.electionElapsed = 0
 	r.Lead = 0
 	r.State = StateFollower
-	r.Term = 1
+	r.Term = 0
 	r.Vote = 0
 	// Your Code Here (2A).
 	return r
@@ -213,11 +213,13 @@ func (r *Raft) sendHeartbeat(to uint64) {
 // tick advances the internal logical clock by a single tick.
 func (r *Raft) tick() {
 	r.electionElapsed++
+	if r.Term == 0 {
+		r.Term = 1
+	}
 	if r.State == StateFollower {
 		if r.electionElapsed >= r.electionTimeout + r.randomWaitTime{
 			// timeout, transfer state into StateCandidate
 			//r.Term++
-			//fmt.Printf("Term变了tick: id: %d state: %s, %d -> %d\n", r.id, r.State, r.Term, r.Term+1)
 			//r.becomeCandidate()
 			r.Step(pb.Message{
 				MsgType: pb.MessageType_MsgHup,
@@ -233,8 +235,9 @@ func (r *Raft) tick() {
 				Term:    r.Term,
 				From:    r.id,
 			})
-		} else if r.electionElapsed >= r.randomWaitTime + r.electionTimeout {
+		} else if r.electionElapsed > r.randomWaitTime + r.electionTimeout {
 			// current election timeout, retry
+			//fmt.Printf("过期了：%d %d\n", r.electionTimeout + r.randomWaitTime, r.electionTimeout)
 			r.Step(pb.Message{
 				MsgType: pb.MessageType_MsgHup,
 				Term:    r.Term,
@@ -338,9 +341,7 @@ func (r *Raft) Step(m pb.Message) error {
 				}
 			} else {
 				r.Term++
-				if r.State != StateCandidate {
-					r.becomeCandidate()
-				}
+				r.becomeCandidate()
 				// candidate send RequestVote
 				for k, _ := range r.votes {
 					if k != r.id {
