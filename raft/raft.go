@@ -16,7 +16,9 @@ package raft
 
 import (
 	"errors"
+	"fmt"
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
+	"github.com/pingcap/log"
 	"math/rand"
 	"time"
 )
@@ -170,11 +172,19 @@ func newRaft(c *Config) *Raft {
 
 	r := new(Raft)
 	r.id = c.ID
+
+	// init votes
 	r.votes = make(map[uint64]bool)
 	for _, p := range c.peers {
 		r.votes[p] = false
 	}
 
+	// init Progress
+	r.Prs = make(map[uint64]*Progress)
+	for _, p := range c.peers {
+		r.Prs[p] = new(Progress)
+		r.Prs[p].Match, r.Prs[p].Next = 0, 1
+	}
 
 	r.heartbeatTimeout = c.HeartbeatTick
 	r.electionTimeout = c.ElectionTick
@@ -186,9 +196,11 @@ func newRaft(c *Config) *Raft {
 	r.electionElapsed = 0
 	r.Lead = 0
 	r.State = StateFollower
-	r.Term = 0
+	r.Term = 1
 	r.Vote = 0
-	// Your Code Here (2A).
+
+	r.RaftLog = newLog(c.Storage)
+
 	return r
 }
 
@@ -196,7 +208,15 @@ func newRaft(c *Config) *Raft {
 // current commit index to the given peer. Returns true if a message was sent.
 func (r *Raft) sendAppend(to uint64) bool {
 	// Your Code Here (2A).
-	return false
+	r.msgs = append(r.msgs, pb.Message{
+		Term: r.Term,
+		MsgType: pb.MessageType_MsgAppend,
+		From: r.id,
+		To: to,
+		Index: r.RaftLog.committed + 1,
+		Entries: []*pb.Entry{new(pb.Entry)},
+	})
+	return true
 }
 
 // sendHeartbeat sends a heartbeat RPC to the given peer.
@@ -377,6 +397,29 @@ func (r *Raft) Step(m pb.Message) error {
 					}
 				}
 			}
+		} else if m.MsgType == pb.MessageType_MsgPropose {
+			if r.State == StateLeader && r.id == m.From {
+				ents := m.Entries
+				li := r.RaftLog.LastIndex()
+				err := r.RaftLog.AppendApplicationEntries(ents, li+1, r.Term)
+				if err != nil {
+					log.Fatal(err.Error())
+					return err
+				}
+				for k, _ := range r.votes {
+					if k != r.id {
+						r.msgs = append(r.msgs, pb.Message{
+							MsgType: pb.MessageType_MsgAppend,
+							From: r.id,
+							To: k,
+							Term: r.Term,
+							Entries: ents,
+							LogTerm: r.Term,
+							Index: li+1,
+						})
+					}
+				}
+			}
 		}
 	} else {
 		// not local message
@@ -502,6 +545,16 @@ func (r *Raft) Step(m pb.Message) error {
 								Reject:  false,
 								Term:    m.Term,
 							})
+						} else {
+							// check whether the data is received by majority of nodes
+							r.received(m.From, m.Index)
+							//fmt.Printf("last index: %d, commit: %d\n", r.RaftLog.LastIndex(), r.RaftLog.committed)
+							for i := r.RaftLog.committed + 1; i <= r.RaftLog.LastIndex(); i++ {
+								if r.majorityReceived(i) {
+									r.RaftLog.committed++
+								}
+							}
+
 						}
 					}
 				}
@@ -514,6 +567,7 @@ func (r *Raft) Step(m pb.Message) error {
 // handleAppendEntries handle AppendEntries RPC request
 func (r *Raft) handleAppendEntries(m pb.Message) {
 	// Your Code Here (2A).
+
 }
 
 // handleHeartbeat handle Heartbeat RPC request
@@ -529,6 +583,23 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 	r.Term = m.Term
 }
 
+func (r *Raft) received(id uint64, next uint64) {
+	fmt.Printf("%d 收到 next: %d\n", id, next)
+	r.Prs[id].Match = next - 1
+	r.Prs[id].Next = next
+}
+
+func (r *Raft) majorityReceived(idx uint64) bool {
+	recv := 0
+	for k, v := range r.Prs {
+		if k != r.id && idx <= v.Match {
+			recv++
+		}
+	}
+	return 2 * (recv + 1) > len(r.Prs)
+}
+
+
 // handleSnapshot handle Snapshot RPC request
 func (r *Raft) handleSnapshot(m pb.Message) {
 	// Your Code Here (2C).
@@ -543,3 +614,5 @@ func (r *Raft) addNode(id uint64) {
 func (r *Raft) removeNode(id uint64) {
 	// Your Code Here (3A).
 }
+
+

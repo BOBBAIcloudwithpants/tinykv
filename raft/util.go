@@ -139,7 +139,7 @@ func (p uint64Slice) Less(i, j int) bool { return p[i] < p[j] }
 func (p uint64Slice) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
 
 func IsLocalMsg(msgt pb.MessageType) bool {
-	return msgt == pb.MessageType_MsgHup || msgt == pb.MessageType_MsgBeat
+	return msgt == pb.MessageType_MsgHup || msgt == pb.MessageType_MsgBeat || msgt == pb.MessageType_MsgPropose
 }
 
 func IsFromLeader(msgt pb.MessageType) bool {

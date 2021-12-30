@@ -14,7 +14,9 @@
 
 package raft
 
-import pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
+import (
+	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
+)
 
 // RaftLog manage the log entries, its struct look like:
 //
@@ -49,6 +51,7 @@ type RaftLog struct {
 	// (Used in 2C)
 	pendingSnapshot *pb.Snapshot
 
+	received map[uint64]map[uint64]bool
 	// Your Data Here (2A).
 }
 
@@ -59,8 +62,8 @@ func newLog(storage Storage) *RaftLog {
 	rl := new(RaftLog)
 	rl.storage = storage
 	rl.entries = make([]pb.Entry, 0)
-
-
+	rl.stabled, _ = storage.LastIndex()
+	rl.received = make(map[uint64]map[uint64]bool)
 	return rl
 }
 
@@ -74,23 +77,64 @@ func (l *RaftLog) maybeCompact() {
 // unstableEntries return all the unstable entries
 func (l *RaftLog) unstableEntries() []pb.Entry {
 	// Your Code Here (2A).
-	return nil
+	return l.entries
 }
 
 // nextEnts returns all the committed but not applied entries
 func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 	// Your Code Here (2A).
-	return nil
+	for _, e := range l.unstableEntries() {
+		if e.Index > l.applied && e.Index <= l.committed {
+			ents = append(ents, e)
+		}
+	}
+	return ents
 }
 
 // LastIndex return the last index of the log entries
 func (l *RaftLog) LastIndex() uint64 {
 	// Your Code Here (2A).
-	return 0
+	if len(l.entries) == 0 {
+		return 0
+	}
+	return l.entries[0].Index + uint64(len(l.entries)) - 1
 }
 
 // Term return the term of the entry in the given index
 func (l *RaftLog) Term(i uint64) (uint64, error) {
 	// Your Code Here (2A).
-	return 0, nil
+	return l.storage.Term(i)
 }
+
+func (l *RaftLog) AppendApplicationEntries(entries []*pb.Entry, firstIndex uint64, term uint64) error {
+	//var ents []pb.Entry
+	idx := firstIndex
+	for _, e := range entries {
+		e.Term = term
+		e.Index = idx
+		e.EntryType = pb.EntryType_EntryNormal
+		//ents = append(ents, *e)
+		l.entries = append(l.entries, *e)
+		l.received[idx] = map[uint64]bool{}
+		idx++
+	}
+	return nil
+
+	//err := l.storage.Append(ents)
+	//l.applied = idx - 1
+	//l.committed, _ = l.storage.LastIndex()
+	//if err == nil {
+	//	// new entries become stable
+	//	l.applied = l.committed
+	//} else {
+	//	l.applied
+	//}
+}
+
+//func (l *RaftLog) Received(index uint64, id uint64) {
+//	l.received[index][id] = true
+//}
+//
+//func (l *RaftLog) MajorityReceived(index uint64, total uint64) bool {
+//	return uint64(2 * len(l.received[index])) > total
+//}
