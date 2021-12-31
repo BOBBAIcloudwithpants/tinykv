@@ -142,8 +142,12 @@ func IsLocalMsg(msgt pb.MessageType) bool {
 	return msgt == pb.MessageType_MsgHup || msgt == pb.MessageType_MsgBeat || msgt == pb.MessageType_MsgPropose
 }
 
-func IsFromLeader(msgt pb.MessageType) bool {
-	return msgt == pb.MessageType_MsgAppend || msgt == pb.MessageType_MsgHeartbeat
+func isNoopEntry(m pb.Message) bool {
+	return m.MsgType == pb.MessageType_MsgAppendResponse && len(m.Entries) == 1 && m.Entries[0].Data == nil
+}
+
+func IsFromLeader(m pb.Message) bool {
+	return (m.MsgType == pb.MessageType_MsgAppend && len(m.Entries) == 0) || m.MsgType == pb.MessageType_MsgHeartbeat
 }
 
 func IsResponseMsg(msgt pb.MessageType) bool {

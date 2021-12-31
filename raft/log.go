@@ -64,6 +64,8 @@ func newLog(storage Storage) *RaftLog {
 	rl.entries = make([]pb.Entry, 0)
 	rl.stabled, _ = storage.LastIndex()
 	rl.received = make(map[uint64]map[uint64]bool)
+	rl.committed = 0
+	rl.applied = 0
 	return rl
 }
 
@@ -77,7 +79,11 @@ func (l *RaftLog) maybeCompact() {
 // unstableEntries return all the unstable entries
 func (l *RaftLog) unstableEntries() []pb.Entry {
 	// Your Code Here (2A).
-	return l.entries
+	ents := l.entries
+	if len(ents) > 0 && ents[0].Data == nil {
+		l.entries = l.entries[1:]
+	}
+	return ents
 }
 
 // nextEnts returns all the committed but not applied entries
@@ -94,10 +100,12 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 // LastIndex return the last index of the log entries
 func (l *RaftLog) LastIndex() uint64 {
 	// Your Code Here (2A).
+	li, _ := l.storage.LastIndex()
+
 	if len(l.entries) == 0 {
-		return 0
+		return li
 	}
-	return l.entries[0].Index + uint64(len(l.entries)) - 1
+	return max(li, l.entries[len(l.entries)-1].Index)
 }
 
 // Term return the term of the entry in the given index
@@ -129,6 +137,10 @@ func (l *RaftLog) AppendApplicationEntries(entries []*pb.Entry, firstIndex uint6
 	//} else {
 	//	l.applied
 	//}
+}
+
+func (l *RaftLog) commitEntries(committed uint64) {
+	l.committed = committed
 }
 
 //func (l *RaftLog) Received(index uint64, id uint64) {
