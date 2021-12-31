@@ -591,6 +591,23 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		if r.RaftLog.committed < m.Commit {
 			r.RaftLog.AppendApplicationEntries(m.Entries, m.Entries[0].Index, m.Term)
 			r.RaftLog.commitEntries(m.Commit)
+		} else {
+			reject := false
+			for _, e := range m.Entries {
+				if !r.RaftLog.entryExisted(e.Index, e.Term) {
+					// reject
+					reject = true
+					break
+				}
+			}
+			r.msgs = append(r.msgs, pb.Message{
+				Term: r.Term,
+				From: r.id,
+				To: m.From,
+				MsgType: pb.MessageType_MsgAppendResponse,
+				Reject: reject,
+			})
+
 		}
 	case StateCandidate:
 	case StateLeader:

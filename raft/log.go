@@ -62,12 +62,20 @@ func newLog(storage Storage) *RaftLog {
 	rl := new(RaftLog)
 	rl.storage = storage
 	rl.entries = make([]pb.Entry, 0)
-	rl.stabled, _ = storage.LastIndex()
 	rl.received = make(map[uint64]map[uint64]bool)
-	rl.committed = 0
-	rl.applied = 0
+	rl.loadEntriesFromStorage()
 	return rl
 }
+
+func (l *RaftLog) entryExisted(idx uint64, logTerm uint64) bool{
+	for _, e := range l.entries {
+		if e.Term == logTerm && e.Index == idx {
+			return true
+		}
+	}
+	return false
+}
+
 
 // We need to compact the log entries in some point of time like
 // storage compact stabled log entries prevent the log entries
@@ -84,6 +92,14 @@ func (l *RaftLog) unstableEntries() []pb.Entry {
 		l.entries = l.entries[1:]
 	}
 	return ents
+}
+
+func (l *RaftLog) loadEntriesFromStorage() {
+	fi, _ := l.storage.FirstIndex()
+	li, _ := l.storage.LastIndex()
+	ents, _ := l.storage.Entries(fi, li+1)
+	l.entries = ents
+	l.stabled, l.applied, l.committed = li, li, li
 }
 
 // nextEnts returns all the committed but not applied entries
