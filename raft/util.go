@@ -147,7 +147,7 @@ func isNoopEntry(m pb.Message) bool {
 }
 
 func IsFromLeader(m pb.Message) bool {
-	return (m.MsgType == pb.MessageType_MsgAppend && len(m.Entries) == 0) || m.MsgType == pb.MessageType_MsgHeartbeat
+	return m.MsgType == pb.MessageType_MsgHeartbeat
 }
 
 func IsResponseMsg(msgt pb.MessageType) bool {

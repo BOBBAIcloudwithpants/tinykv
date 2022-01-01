@@ -64,16 +64,65 @@ func newLog(storage Storage) *RaftLog {
 	rl.entries = make([]pb.Entry, 0)
 	rl.received = make(map[uint64]map[uint64]bool)
 	rl.loadEntriesFromStorage()
+
 	return rl
 }
 
 func (l *RaftLog) entryExisted(idx uint64, logTerm uint64) bool{
+	//fmt.Printf("寻找：index: %d, term: %d\n", idx, logTerm)
+	if idx == 0 && logTerm == 0 {
+		return true
+	}
+
 	for _, e := range l.entries {
+
+		//fmt.Printf("e index: %d, logTerm: %d\n", e.Index, e.Term)
 		if e.Term == logTerm && e.Index == idx {
+
 			return true
 		}
 	}
 	return false
+}
+
+func (l *RaftLog) matchEntriesAndAppend(entries []*pb.Entry) {
+
+	if len(entries) == 0 {
+		return
+	}
+	var i int
+	idx := entries[0].Index
+	for i = len(l.entries) - 1; i >= 0; i-- {
+		if idx == l.entries[i].Index {
+			break
+		}
+	}
+
+	ents := make([]pb.Entry, 0, len(entries))
+	for _, e := range entries {
+		ents = append(ents, *e)
+	}
+
+	if i == -1 {
+		// no match, just append
+		l.entries = append(l.entries, ents...)
+	} else {
+		old_len := len(l.entries)
+		for k, e := range ents {
+			if i >= old_len {
+				l.entries = append(l.entries, ents[k:]...)
+				break
+			}
+			if e.Term != l.entries[i].Term {
+				// cover
+				l.stabled = l.entries[i].Index - 1
+				l.entries = append(l.entries[:i], ents[k:]...)
+				break
+			}
+			i++
+		}
+	}
+	// cover the entry at pos i+1
 }
 
 
@@ -87,17 +136,26 @@ func (l *RaftLog) maybeCompact() {
 // unstableEntries return all the unstable entries
 func (l *RaftLog) unstableEntries() []pb.Entry {
 	// Your Code Here (2A).
-	ents := l.entries
-	if len(ents) > 0 && ents[0].Data == nil {
+	if len(l.entries) > 0 && l.entries[0].Data == nil {
+		// skip noop entry
 		l.entries = l.entries[1:]
 	}
-	return ents
+	ents := l.entries
+	i := 0
+	for ;i < len(ents); i++ {
+		if l.entries[i].Index > l.stabled {
+			break
+		}
+	}
+
+	return ents[i:]
 }
 
 func (l *RaftLog) loadEntriesFromStorage() {
 	fi, _ := l.storage.FirstIndex()
 	li, _ := l.storage.LastIndex()
 	ents, _ := l.storage.Entries(fi, li+1)
+	//fmt.Printf("loadEntriesFromStorage li: %d, fi: %d, ents: %+v\n", li, fi, ents)
 	l.entries = ents
 	l.stabled, l.applied, l.committed = li, li, li
 }
@@ -133,6 +191,9 @@ func (l *RaftLog) Term(i uint64) (uint64, error) {
 func (l *RaftLog) AppendApplicationEntries(entries []*pb.Entry, firstIndex uint64, term uint64) error {
 	//var ents []pb.Entry
 	idx := firstIndex
+	if term == 0 {
+		term = 1
+	}
 	for _, e := range entries {
 		e.Term = term
 		e.Index = idx

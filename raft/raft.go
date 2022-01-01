@@ -401,7 +401,7 @@ func (r *Raft) Step(m pb.Message) error {
 			if r.State == StateLeader && r.id == m.From {
 				ents := m.Entries
 				li := r.RaftLog.LastIndex()
-				err := r.RaftLog.AppendApplicationEntries(ents, li+1, r.Term)
+				err := r.RaftLog.AppendApplicationEntries(ents, li+1, m.LogTerm)
 				if err != nil {
 					log.Fatal(err.Error())
 					return err
@@ -588,24 +588,26 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 	// Your Code Here (2A).
 	switch r.State {
 	case StateFollower:
+
 		if r.RaftLog.committed < m.Commit {
-			r.RaftLog.AppendApplicationEntries(m.Entries, m.Entries[0].Index, m.Term)
+			r.RaftLog.AppendApplicationEntries(m.Entries, m.Entries[0].Index, m.LogTerm)
 			r.RaftLog.commitEntries(m.Commit)
 		} else {
 			reject := false
-			for _, e := range m.Entries {
-				if !r.RaftLog.entryExisted(e.Index, e.Term) {
-					// reject
-					reject = true
-					break
-				}
+			if !r.RaftLog.entryExisted(m.Index, m.LogTerm) {
+				// reject
+				reject = true
 			}
+			if !reject {
+				r.RaftLog.matchEntriesAndAppend(m.Entries)
+			}
+
 			r.msgs = append(r.msgs, pb.Message{
-				Term: r.Term,
-				From: r.id,
-				To: m.From,
+				Term:    r.Term,
+				From:    r.id,
+				To:      m.From,
 				MsgType: pb.MessageType_MsgAppendResponse,
-				Reject: reject,
+				Reject:  reject,
 			})
 
 		}
