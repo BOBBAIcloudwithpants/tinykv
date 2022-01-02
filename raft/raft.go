@@ -386,6 +386,8 @@ func (r *Raft) Step(m pb.Message) error {
 		} else if m.MsgType == pb.MessageType_MsgBeat {
 			// leader send heartbeats
 			if r.State == StateLeader && r.id == m.From {
+				//li := r.RaftLog.LastIndex()
+				//lt, _ := r.RaftLog.Term(li)
 				for k, _ := range r.votes {
 					if k != r.id {
 						r.msgs = append(r.msgs, pb.Message{
@@ -400,22 +402,27 @@ func (r *Raft) Step(m pb.Message) error {
 		} else if m.MsgType == pb.MessageType_MsgPropose {
 			if r.State == StateLeader && r.id == m.From {
 				ents := m.Entries
+
 				li := r.RaftLog.LastIndex()
+
 				err := r.RaftLog.AppendApplicationEntries(ents, li+1, m.LogTerm)
 				if err != nil {
 					log.Fatal(err.Error())
 					return err
 				}
+
 				for k, _ := range r.Prs {
 					if k != r.id {
-						r.createAppendMsg(k, ents)
+						if !isEmptyEntries(ents) {
+							r.createAppendMsg(k, ents)
+						} else {
+							r.syncWithPeers(k)
+						}
 					}
 				}
 				if len(r.Prs) == 1 {
 					r.handleCommit()
 				}
-				// if only one node
-
 			}
 		}
 	} else {
@@ -520,6 +527,10 @@ func (r *Raft) Step(m pb.Message) error {
 				if m.To == r.id {
 					if m.MsgType == pb.MessageType_MsgHeartbeatResponse {
 						r.electionElapsed = 0
+
+						// set peers progress
+						r.received(m.From, m.Index)
+
 					} else if m.MsgType == pb.MessageType_MsgRequestVote {
 						if m.Term > r.Term {
 							// become other's follower & vote for others
@@ -546,21 +557,18 @@ func (r *Raft) Step(m pb.Message) error {
 							})
 						} else {
 							// check whether the data is received by majority of nodes
-
-							r.received(m.From, m.Index)
-
-							//fmt.Printf("收到消息之后：%d\n", m.Index)
-							//for k, p := range r.Prs {
-							//	fmt.Printf("id: %d, match: %d, next: %d\n", k, p.Match, p.Next)
-							//}
-
-							//fmt.Printf("M的index：%d last index: %d, commit: %d\n",m.Index, r.RaftLog.LastIndex(), r.RaftLog.committed)
-							for i := r.RaftLog.committed + 1; i <= r.RaftLog.LastIndex(); i++ {
-								if r.majorityReceived(i) {
-									r.handleCommit()
+							if !m.Reject {
+								r.received(m.From, m.Index)
+								for i := r.RaftLog.committed + 1; i <= r.RaftLog.LastIndex(); i++ {
+									if r.majorityReceived(i) {
+										r.handleCommit()
+									}
 								}
+							} else {
+								// retry
+								r.received(m.From, m.Index-1)
+								r.syncWithPeers(m.From)
 							}
-
 						}
 					}
 				}
@@ -571,6 +579,7 @@ func (r *Raft) Step(m pb.Message) error {
 }
 
 func (r *Raft) createAppendMsg(to uint64, ents []*pb.Entry) {
+	// TODO: send based on peers' progress
 	r.msgs = append(r.msgs, pb.Message{
 		Term:    r.Term,
 		MsgType: pb.MessageType_MsgAppend,
@@ -583,34 +592,75 @@ func (r *Raft) createAppendMsg(to uint64, ents []*pb.Entry) {
 	})
 }
 
+func (r *Raft) syncWithPeers(to uint64) {
+
+	i, t := r.findMatchedIndexAndTerm(to)
+	r.msgs = append(r.msgs, pb.Message{
+		Term:    r.Term,
+		MsgType: pb.MessageType_MsgAppend,
+		From:    r.id,
+		To:      to,
+		Index:   i,
+		Entries: r.RaftLog.GetEntriesByIndex(i),
+		LogTerm: t,
+		Commit:  r.RaftLog.committed,
+	})
+}
+
+func (r *Raft) findMatchedIndexAndTerm(to uint64) (uint64, uint64) {
+	fi := r.Prs[to].Match
+	ft, err := r.RaftLog.Term(fi)
+	if err != nil {
+		if err == IndexOutOfBounds {
+			return 0, 0
+		} else if err == IndexNotExisted {
+			fi = ft
+			ft, _ = r.RaftLog.Term(fi)
+			return fi, ft
+		}
+	}
+
+	r.Prs[to].Match = fi
+	return fi, ft
+}
+
 // handleAppendEntries handle AppendEntries RPC request
 func (r *Raft) handleAppendEntries(m pb.Message) {
 	// Your Code Here (2A).
 	switch r.State {
 	case StateFollower:
 
-		if r.RaftLog.committed < m.Commit {
-			r.RaftLog.AppendApplicationEntries(m.Entries, m.Entries[0].Index, m.LogTerm)
-			r.RaftLog.commitEntries(m.Commit)
-		} else {
-			reject := false
-			if !r.RaftLog.entryExisted(m.Index, m.LogTerm) {
-				// reject
-				reject = true
-			}
-			if !reject {
-				r.RaftLog.matchEntriesAndAppend(m.Entries)
-			}
-
-			r.msgs = append(r.msgs, pb.Message{
-				Term:    r.Term,
-				From:    r.id,
-				To:      m.From,
-				MsgType: pb.MessageType_MsgAppendResponse,
-				Reject:  reject,
-			})
-
+		//if r.RaftLog.committed < m.Commit {
+		//	r.RaftLog.AppendApplicationEntries(m.Entries, m.Entries[0].Index, m.LogTerm)
+		//	r.RaftLog.commitEntries(m.Commit)
+		//} else {
+		reject := false
+		if !r.RaftLog.entryExisted(m.Index, m.LogTerm) {
+			// reject
+			reject = true
 		}
+		if !reject {
+			r.RaftLog.matchEntriesAndAppend(m.Index, m.LogTerm, m.Entries)
+			r.RaftLog.commitEntries(m.Commit)
+			if m.Index != 0 && m.LogTerm != 0 {
+				r.RaftLog.applyEntries(r.RaftLog.LastIndex())
+			}
+		}
+		fi, ft := m.Index, m.LogTerm
+		if !reject {
+			fi = r.RaftLog.LastIndex()
+			ft, _ = r.RaftLog.Term(fi)
+		}
+		r.msgs = append(r.msgs, pb.Message{
+			Term:    r.Term,
+			From:    r.id,
+			To:      m.From,
+			MsgType: pb.MessageType_MsgAppendResponse,
+			Reject:  reject,
+			Index:   fi,
+			LogTerm: ft,
+		})
+
 	case StateCandidate:
 	case StateLeader:
 	}
@@ -618,11 +668,17 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 
 // handleHeartbeat handle Heartbeat RPC request
 func (r *Raft) handleHeartbeat(m pb.Message) {
+
+	li := r.RaftLog.LastIndex()
+	lt, _ := r.RaftLog.Term(li)
 	r.msgs = append(r.msgs, pb.Message{
 		From:    r.id,
 		To:      m.From,
 		MsgType: pb.MessageType_MsgHeartbeatResponse,
 		Term:    m.Term,
+		Index:   li,
+		LogTerm: lt,
+		Commit:  r.RaftLog.committed,
 	})
 	r.electionElapsed = 0
 	//fmt.Printf("handleHeartbeat,从%d到%d: Term变了，id: %d, state: %s, %d -> %d\n",m.From, r.id, r.id, r.State, r.Term, m.Term)

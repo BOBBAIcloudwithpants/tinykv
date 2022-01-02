@@ -15,6 +15,7 @@
 package raft
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -26,6 +27,11 @@ import (
 
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
+
+var (
+	IndexNotExisted = errors.New("given index not existed in current log")
+	IndexOutOfBounds = errors.New("given index has been out of current log index bound")
+	)
 
 func min(a, b uint64) uint64 {
 	if a > b {
@@ -121,6 +127,14 @@ func mustTemp(pre, body string) string {
 	}
 	f.Close()
 	return f.Name()
+}
+
+func isEmptyEntry(e *pb.Entry) bool{
+	return e.Data == nil && e.Term == 0 && e.Index == 0
+}
+
+func isEmptyEntries(ents []*pb.Entry) bool{
+	return len(ents) == 0 || (len(ents) == 1 && isEmptyEntry(ents[0]))
 }
 
 func ltoa(l *RaftLog) string {
