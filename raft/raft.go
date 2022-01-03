@@ -200,7 +200,7 @@ func newRaft(c *Config) *Raft {
 	r.electionElapsed = 0
 	r.Lead = 0
 	r.State = StateFollower
-	r.Term = 1
+	r.Term = 0
 	r.Vote = 0
 
 	r.RaftLog = newLog(c.Storage)
@@ -239,8 +239,6 @@ func (r *Raft) tick() {
 	if r.State == StateFollower {
 		if r.electionElapsed >= r.electionTimeout+r.randomWaitTime {
 			// timeout, transfer state into StateCandidate
-			//r.Term++
-			//r.becomeCandidate()
 			r.Step(pb.Message{
 				MsgType: pb.MessageType_MsgHup,
 				Term:    r.Term,
@@ -307,7 +305,7 @@ func (r *Raft) becomeCandidate() {
 	// Your Code Here (2A).
 	r.State = StateCandidate
 	r.electionElapsed = 0
-	//r.Term++
+	r.Term++
 	// vote for myself
 	for k, _ := range r.votes {
 		r.votes[k] = false
@@ -360,7 +358,7 @@ func (r *Raft) Step(m pb.Message) error {
 					}
 				}
 			} else {
-				r.Term++
+				//r.Term++
 				r.becomeCandidate()
 				// candidate send RequestVote
 				li := r.RaftLog.LastIndex()
@@ -372,7 +370,7 @@ func (r *Raft) Step(m pb.Message) error {
 							From:    r.id,
 							To:      k,
 							Term:    r.Term,
-							Index: li,
+							Index:   li,
 							LogTerm: lt,
 						})
 					}
@@ -425,7 +423,7 @@ func (r *Raft) Step(m pb.Message) error {
 					}
 				}
 				if len(r.Prs) == 1 {
-					r.handleCommit()
+					r.handleCommit(r.RaftLog.LastIndex() + 1)
 				}
 			}
 		}
@@ -441,141 +439,151 @@ func (r *Raft) Step(m pb.Message) error {
 		} else {
 			switch r.State {
 			case StateFollower:
-				if m.To == r.id {
-					if m.MsgType == pb.MessageType_MsgHeartbeat {
-						r.handleHeartbeat(m)
-					} else if m.MsgType == pb.MessageType_MsgRequestVote {
-						// vote for candidate
-						rej := false
-						if r.Vote != 0 && r.Vote != m.From {
-							rej = true
-						}
-						if !r.RaftLog.isLogNewer(m.Index, m.LogTerm) {
-							rej = true
-						}
+				if m.MsgType == pb.MessageType_MsgHeartbeat {
+					r.handleHeartbeat(m)
+				} else if m.MsgType == pb.MessageType_MsgRequestVote {
+					// vote for candidate
+					rej := false
+					if r.Vote != 0 && r.Vote != m.From {
+						rej = true
+					}
+					if !r.RaftLog.isLogNewer(m.Index, m.LogTerm) {
+						rej = true
+					}
 
-						if !rej {
-							//fmt.Printf("MessageType_MsgRequestVote,从%d到%d, Term变了，id: %d, state: %s, %d -> %d\n",m.From,r.id, r.id, r.State, r.Term, m.Term)
-							r.Vote = m.From
-							r.Term = m.Term
-						}
-						r.electionElapsed = 0
+					if !rej {
+						//fmt.Printf("MessageType_MsgRequestVote,从%d到%d, Term变了，id: %d, state: %s, %d -> %d\n",m.From,r.id, r.id, r.State, r.Term, m.Term)
+						r.Vote = m.From
+						r.Term = m.Term
+					}
+					r.electionElapsed = 0
 
-						r.msgs = append(r.msgs, pb.Message{
-							From:    r.id,
-							To:      m.From,
-							MsgType: pb.MessageType_MsgRequestVoteResponse,
-							Reject:  rej,
-							Term:    r.Term,
-						})
-					} else if m.MsgType == pb.MessageType_MsgAppend {
+					r.msgs = append(r.msgs, pb.Message{
+						From:    r.id,
+						To:      m.From,
+						MsgType: pb.MessageType_MsgRequestVoteResponse,
+						Reject:  rej,
+						Term:    r.Term,
+					})
+				} else if m.MsgType == pb.MessageType_MsgAppend {
+					if isEmptyAppendRPC(m) {
+						if m.Term > r.Term {
+							r.becomeFollower(m.Term, m.From)
+						}
+					} else {
 						r.handleAppendEntries(m)
 					}
 				}
 			case StateCandidate:
-				if m.To == r.id {
-					if m.MsgType == pb.MessageType_MsgRequestVote {
-						if m.Term > r.Term {
-							// become other's follower & vote for others
-							r.becomeFollower(m.Term, m.From)
-							r.Vote = m.From
-							r.msgs = append(r.msgs, pb.Message{
-								MsgType: pb.MessageType_MsgRequestVoteResponse,
-								From:    r.id,
-								To:      m.From,
-								Reject:  false,
-								Term:    m.Term,
-							})
+				if m.MsgType == pb.MessageType_MsgRequestVote {
+					if m.Term > r.Term {
+						// become other's follower & vote for others
+						r.becomeFollower(m.Term, m.From)
+						r.Vote = m.From
+						r.msgs = append(r.msgs, pb.Message{
+							MsgType: pb.MessageType_MsgRequestVoteResponse,
+							From:    r.id,
+							To:      m.From,
+							Reject:  false,
+							Term:    m.Term,
+						})
 
-						} else {
-							// reject other's vote
-							r.msgs = append(r.msgs, pb.Message{
-								MsgType: pb.MessageType_MsgRequestVoteResponse,
-								From:    r.id,
-								To:      m.From,
-								Reject:  true,
-								Term:    r.Term,
-							})
-						}
+					} else {
+						// reject other's vote
+						r.msgs = append(r.msgs, pb.Message{
+							MsgType: pb.MessageType_MsgRequestVoteResponse,
+							From:    r.id,
+							To:      m.From,
+							Reject:  true,
+							Term:    r.Term,
+						})
+					}
 
-					} else if m.MsgType == pb.MessageType_MsgRequestVoteResponse {
-						// check other's vote
-						if m.Reject == false {
-							r.votes[m.From] = true
-							if winElection(r) {
-								r.becomeLeader()
-								r.Step(pb.Message{
-									MsgType: pb.MessageType_MsgBeat,
-									Term:    r.Term,
-									From:    r.id,
-								})
-							}
-						}
-					} else if m.MsgType == pb.MessageType_MsgHeartbeat {
-						if m.Term >= r.Term {
-							// become follower
-							r.becomeFollower(m.Term, m.From)
-							r.handleHeartbeat(m)
-						} else {
-							r.msgs = append(r.msgs, pb.Message{
+				} else if m.MsgType == pb.MessageType_MsgRequestVoteResponse {
+					// check other's vote
+					if m.Reject == false {
+						r.votes[m.From] = true
+						if winElection(r) {
+							r.becomeLeader()
+							r.Step(pb.Message{
+								MsgType: pb.MessageType_MsgBeat,
 								Term:    r.Term,
 								From:    r.id,
-								To:      m.From,
-								MsgType: pb.MessageType_MsgAppendResponse,
 							})
 						}
-					} else if m.MsgType == pb.MessageType_MsgAppend {
+					}
+				} else if m.MsgType == pb.MessageType_MsgHeartbeat {
+					if m.Term >= r.Term {
 						// become follower
 						r.becomeFollower(m.Term, m.From)
-
+						r.handleHeartbeat(m)
+					} else {
+						r.msgs = append(r.msgs, pb.Message{
+							Term:    r.Term,
+							From:    r.id,
+							To:      m.From,
+							MsgType: pb.MessageType_MsgAppendResponse,
+						})
+					}
+				} else if m.MsgType == pb.MessageType_MsgAppend {
+					// become follower
+					if isEmptyAppendRPC(m) {
+						if m.Term >= r.Term {
+							r.becomeFollower(m.Term, m.From)
+						}
 					}
 				}
 			case StateLeader:
-				if m.To == r.id {
-					if m.MsgType == pb.MessageType_MsgHeartbeatResponse {
-						r.electionElapsed = 0
+				if m.MsgType == pb.MessageType_MsgHeartbeatResponse {
+					r.electionElapsed = 0
 
-						// set peers progress
-						r.received(m.From, m.Index)
+					// set peers progress
+					r.received(m.From, m.Index)
 
-					} else if m.MsgType == pb.MessageType_MsgRequestVote {
-						if m.Term > r.Term {
-							// become other's follower & vote for others
-							r.becomeFollower(m.Term, m.From)
-							r.Vote = m.From
-							r.msgs = append(r.msgs, pb.Message{
-								MsgType: pb.MessageType_MsgRequestVoteResponse,
-								From:    r.id,
-								To:      m.From,
-								Reject:  false,
-								Term:    m.Term,
-							})
-						}
-					} else if m.MsgType == pb.MessageType_MsgAppendResponse {
-						if m.Term > r.Term {
-							r.becomeFollower(m.Term, m.From)
-							r.Vote = m.From
-							r.msgs = append(r.msgs, pb.Message{
-								MsgType: pb.MessageType_MsgRequestVoteResponse,
-								From:    r.id,
-								To:      m.From,
-								Reject:  false,
-								Term:    m.Term,
-							})
-						} else {
-							// check whether the data is received by majority of nodes
-							if !m.Reject {
-								r.received(m.From, m.Index)
-								for i := r.RaftLog.committed + 1; i <= m.Index; i++ {
-									if r.majorityReceived(i) {
-										r.handleCommit()
-									}
+				} else if m.MsgType == pb.MessageType_MsgRequestVote {
+					if m.Term > r.Term {
+						// become other's follower & vote for others
+						r.becomeFollower(m.Term, m.From)
+						r.Vote = m.From
+						r.msgs = append(r.msgs, pb.Message{
+							MsgType: pb.MessageType_MsgRequestVoteResponse,
+							From:    r.id,
+							To:      m.From,
+							Reject:  false,
+							Term:    m.Term,
+						})
+					}
+				} else if m.MsgType == pb.MessageType_MsgAppendResponse {
+					if m.Term > r.Term {
+						r.becomeFollower(m.Term, m.From)
+						r.Vote = m.From
+						r.msgs = append(r.msgs, pb.Message{
+							MsgType: pb.MessageType_MsgRequestVoteResponse,
+							From:    r.id,
+							To:      m.From,
+							Reject:  false,
+							Term:    m.Term,
+						})
+					} else {
+						// check whether the data is received by majority of nodes
+						if !m.Reject {
+							r.received(m.From, m.Index)
+							for i := r.RaftLog.committed + 1; i <= m.Index; i++ {
+								if r.majorityReceived(i) {
+									r.handleCommit(i)
 								}
-							} else {
-								// retry
-								r.received(m.From, m.Index-1)
-								r.syncWithPeers(m.From)
 							}
+						} else {
+							// retry
+							r.received(m.From, m.Index-1)
+							r.syncWithPeers(m.From)
+						}
+					}
+				} else if m.MsgType == pb.MessageType_MsgAppend {
+					// become follower
+					if isEmptyAppendRPC(m) {
+						if m.Term > r.Term {
+							r.becomeFollower(m.Term, m.From)
 						}
 					}
 				}
@@ -700,7 +708,7 @@ func (r *Raft) received(id uint64, match uint64) {
 func (r *Raft) majorityReceived(idx uint64) bool {
 	recv := 0
 	t, err := r.RaftLog.Term(idx)
-	isInTerm := err != nil && t == r.Term
+	isInTerm := err != nil || t == r.Term
 	for k, v := range r.Prs {
 		//fmt.Printf("PEER: %d，Match：%d\n",  k, v.Match)
 		if k != r.id && idx <= v.Match {
@@ -711,8 +719,8 @@ func (r *Raft) majorityReceived(idx uint64) bool {
 	return isInTerm && 2*(recv+1) >= len(r.Prs)
 }
 
-func (r *Raft) handleCommit() {
-	r.RaftLog.committed++
+func (r *Raft) handleCommit(c uint64) {
+	r.RaftLog.committed = c
 }
 
 // handleSnapshot handle Snapshot RPC request

@@ -876,6 +876,7 @@ func TestLeaderOnlyCommitsLogFromCurrentTerm2AB(t *testing.T) {
 		r.becomeCandidate()
 		r.becomeLeader()
 		r.readMessages()
+
 		// propose a entry to current term
 		r.Step(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgPropose, Entries: []*pb.Entry{{}}})
 

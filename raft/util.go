@@ -129,6 +129,10 @@ func mustTemp(pre, body string) string {
 	return f.Name()
 }
 
+func isEmptyAppendRPC(m pb.Message) bool{
+	return m.Index == 0 && m.LogTerm == 0 && m.Commit == 0 && m.Entries == nil
+}
+
 func isEmptyEntry(e *pb.Entry) bool{
 	return e.Data == nil && e.Term == 0 && e.Index == 0
 }
@@ -161,6 +165,7 @@ func isNoopEntry(m pb.Message) bool {
 }
 
 func IsFromLeader(m pb.Message) bool {
+
 	return m.MsgType == pb.MessageType_MsgHeartbeat
 }
 
