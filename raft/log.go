@@ -85,6 +85,28 @@ func (l *RaftLog) entryExisted(idx uint64, logTerm uint64) bool{
 	return false
 }
 
+func (l *RaftLog) isLogNewer(index uint64, term uint64) bool {
+	if len(l.entries) == 0 {
+		return true
+	}
+	ct, err := l.Term(index)
+	if err != nil {
+		if err == IndexOutOfBounds {
+			return false
+		} else if err == IndexNotExisted {
+			// index > lastIndex
+			t, _ := l.Term(l.LastIndex())
+			return term >= t
+		}
+	}
+	if ct != term {
+		return term > ct
+	}
+
+	return index >= l.LastIndex()
+
+}
+
 func (l *RaftLog) matchEntriesAndAppend(index uint64, term uint64, entries []*pb.Entry) {
 
 	if len(entries) == 0 {
@@ -164,7 +186,7 @@ func (l *RaftLog) loadEntriesFromStorage() {
 	ents, _ := l.storage.Entries(fi, li+1)
 	//fmt.Printf("loadEntriesFromStorage li: %d, fi: %d, ents: %+v\n", li, fi, ents)
 	l.entries = ents
-	l.stabled, l.applied, l.committed = li, li, li
+	l.stabled = li
 }
 
 // nextEnts returns all the committed but not applied entries

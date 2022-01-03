@@ -363,6 +363,8 @@ func (r *Raft) Step(m pb.Message) error {
 				r.Term++
 				r.becomeCandidate()
 				// candidate send RequestVote
+				li := r.RaftLog.LastIndex()
+				lt, _ := r.RaftLog.Term(li)
 				for k, _ := range r.votes {
 					if k != r.id {
 						r.msgs = append(r.msgs, pb.Message{
@@ -370,6 +372,8 @@ func (r *Raft) Step(m pb.Message) error {
 							From:    r.id,
 							To:      k,
 							Term:    r.Term,
+							Index: li,
+							LogTerm: lt,
 						})
 					}
 				}
@@ -444,6 +448,9 @@ func (r *Raft) Step(m pb.Message) error {
 						// vote for candidate
 						rej := false
 						if r.Vote != 0 && r.Vote != m.From {
+							rej = true
+						}
+						if !r.RaftLog.isLogNewer(m.Index, m.LogTerm) {
 							rej = true
 						}
 
@@ -559,7 +566,7 @@ func (r *Raft) Step(m pb.Message) error {
 							// check whether the data is received by majority of nodes
 							if !m.Reject {
 								r.received(m.From, m.Index)
-								for i := r.RaftLog.committed + 1; i <= r.RaftLog.LastIndex(); i++ {
+								for i := r.RaftLog.committed + 1; i <= m.Index; i++ {
 									if r.majorityReceived(i) {
 										r.handleCommit()
 									}
@@ -629,7 +636,6 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 	// Your Code Here (2A).
 	switch r.State {
 	case StateFollower:
-
 		//if r.RaftLog.committed < m.Commit {
 		//	r.RaftLog.AppendApplicationEntries(m.Entries, m.Entries[0].Index, m.LogTerm)
 		//	r.RaftLog.commitEntries(m.Commit)
@@ -643,8 +649,9 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 			r.RaftLog.matchEntriesAndAppend(m.Index, m.LogTerm, m.Entries)
 			r.RaftLog.commitEntries(m.Commit)
 			if m.Index != 0 && m.LogTerm != 0 {
-				r.RaftLog.applyEntries(r.RaftLog.LastIndex())
+				//r.RaftLog.applyEntries(r.RaftLog.LastIndex())
 			}
+			r.Term = m.Term
 		}
 		fi, ft := m.Index, m.LogTerm
 		if !reject {
@@ -692,6 +699,8 @@ func (r *Raft) received(id uint64, match uint64) {
 
 func (r *Raft) majorityReceived(idx uint64) bool {
 	recv := 0
+	t, err := r.RaftLog.Term(idx)
+	isInTerm := err != nil && t == r.Term
 	for k, v := range r.Prs {
 		//fmt.Printf("PEER: %d，Match：%d\n",  k, v.Match)
 		if k != r.id && idx <= v.Match {
@@ -699,7 +708,7 @@ func (r *Raft) majorityReceived(idx uint64) bool {
 		}
 	}
 	//fmt.Printf("收到：%d, len: %d\n", recv, len(r.Prs))
-	return 2*(recv+1) > len(r.Prs)
+	return isInTerm && 2*(recv+1) >= len(r.Prs)
 }
 
 func (r *Raft) handleCommit() {
