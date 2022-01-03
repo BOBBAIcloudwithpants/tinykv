@@ -592,8 +592,6 @@ func TestFollowerCheckMessageType_MsgAppend2AB(t *testing.T) {
 		storage := NewMemoryStorage()
 		storage.Append(ents)
 
-
-
 		r := newTestRaft(1, []uint64{1, 2, 3}, 10, 1, storage)
 		r.RaftLog.committed = 1
 		r.becomeFollower(2, 2)

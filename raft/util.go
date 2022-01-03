@@ -129,16 +129,8 @@ func mustTemp(pre, body string) string {
 	return f.Name()
 }
 
-func isEmptyAppendRPC(m pb.Message) bool{
-	return m.Index == 0 && m.LogTerm == 0 && m.Commit == 0 && m.Entries == nil
-}
-
 func isEmptyEntry(e *pb.Entry) bool{
 	return e.Data == nil && e.Term == 0 && e.Index == 0
-}
-
-func isEmptyEntries(ents []*pb.Entry) bool{
-	return len(ents) == 0 || (len(ents) == 1 && isEmptyEntry(ents[0]))
 }
 
 func ltoa(l *RaftLog) string {

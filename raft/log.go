@@ -70,7 +70,7 @@ func newLog(storage Storage) *RaftLog {
 
 func (l *RaftLog) entryExisted(idx uint64, logTerm uint64) bool{
 	//fmt.Printf("寻找：index: %d, term: %d\n", idx, logTerm)
-	if idx == 0 && logTerm == 0 {
+	if idx == 0 {
 		return true
 	}
 

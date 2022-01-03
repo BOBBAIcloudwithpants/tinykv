@@ -133,6 +133,9 @@ type Raft struct {
 	// the leader id
 	Lead uint64
 
+	// current vote number
+	VoteNum uint64
+
 	// heartbeat interval, should send
 	heartbeatTimeout int
 	// baseline of election interval
@@ -202,8 +205,10 @@ func newRaft(c *Config) *Raft {
 	r.State = StateFollower
 	r.Term = 0
 	r.Vote = 0
-
+	r.VoteNum = 0
 	r.RaftLog = newLog(c.Storage)
+	r.received(r.id, r.RaftLog.LastIndex())
+
 
 	return r
 }
@@ -288,7 +293,7 @@ func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	r.Lead = lead
 	r.Vote = 0
 	r.electionElapsed = 0
-
+	r.VoteNum = 0
 	rand.Seed(time.Now().UnixNano())
 	r.randomWaitTime = produceRandomElectionTerm(0, r.electionTimeout)
 
@@ -312,6 +317,7 @@ func (r *Raft) becomeCandidate() {
 	}
 	r.Vote = r.id
 	r.votes[r.id] = true
+	r.VoteNum = 1
 
 	rand.Seed(time.Now().UnixNano())
 	r.randomWaitTime = produceRandomElectionTerm(0, r.electionTimeout)
@@ -327,6 +333,7 @@ func (r *Raft) becomeLeader() {
 	r.State = StateLeader
 	r.electionElapsed = 0
 	r.heartbeatElapsed = 0
+	r.VoteNum = 0
 	for k, _ := range r.votes {
 		r.votes[k] = false
 	}
@@ -415,11 +422,12 @@ func (r *Raft) Step(m pb.Message) error {
 
 				for k, _ := range r.Prs {
 					if k != r.id {
-						if !isEmptyEntries(ents) {
-							r.createAppendMsg(k, ents)
-						} else {
-							r.syncWithPeers(k)
-						}
+						//if !isEmptyEntries(ents) {
+						//	r.createAppendMsg(k, ents)
+						//} else {
+						//	r.syncWithPeers(k)
+						//}
+						r.syncWithPeers(k)
 					}
 				}
 				if len(r.Prs) == 1 {
@@ -444,6 +452,9 @@ func (r *Raft) Step(m pb.Message) error {
 				} else if m.MsgType == pb.MessageType_MsgRequestVote {
 					// vote for candidate
 					rej := false
+					if r.Term >= m.Term {
+						rej = true
+					}
 					if r.Vote != 0 && r.Vote != m.From {
 						rej = true
 					}
@@ -451,13 +462,13 @@ func (r *Raft) Step(m pb.Message) error {
 						rej = true
 					}
 
+
 					if !rej {
 						//fmt.Printf("MessageType_MsgRequestVote,从%d到%d, Term变了，id: %d, state: %s, %d -> %d\n",m.From,r.id, r.id, r.State, r.Term, m.Term)
 						r.Vote = m.From
 						r.Term = m.Term
 					}
 					r.electionElapsed = 0
-
 					r.msgs = append(r.msgs, pb.Message{
 						From:    r.id,
 						To:      m.From,
@@ -466,13 +477,13 @@ func (r *Raft) Step(m pb.Message) error {
 						Term:    r.Term,
 					})
 				} else if m.MsgType == pb.MessageType_MsgAppend {
-					if isEmptyAppendRPC(m) {
-						if m.Term > r.Term {
-							r.becomeFollower(m.Term, m.From)
-						}
-					} else {
-						r.handleAppendEntries(m)
+
+					if m.Term > r.Term {
+						r.becomeFollower(m.Term, m.From)
 					}
+
+					r.handleAppendEntries(m)
+
 				}
 			case StateCandidate:
 				if m.MsgType == pb.MessageType_MsgRequestVote {
@@ -501,17 +512,25 @@ func (r *Raft) Step(m pb.Message) error {
 
 				} else if m.MsgType == pb.MessageType_MsgRequestVoteResponse {
 					// check other's vote
+					r.VoteNum++
 					if m.Reject == false {
 						r.votes[m.From] = true
 						if winElection(r) {
 							r.becomeLeader()
 							r.Step(pb.Message{
-								MsgType: pb.MessageType_MsgBeat,
+								MsgType: pb.MessageType_MsgPropose,
 								Term:    r.Term,
 								From:    r.id,
+
 							})
 						}
 					}
+
+					if int(r.VoteNum) == len(r.votes) && !winElection(r){
+						// election has end, the candidate lose
+						r.becomeFollower(m.Term, m.From)
+					}
+
 				} else if m.MsgType == pb.MessageType_MsgHeartbeat {
 					if m.Term >= r.Term {
 						// become follower
@@ -527,11 +546,10 @@ func (r *Raft) Step(m pb.Message) error {
 					}
 				} else if m.MsgType == pb.MessageType_MsgAppend {
 					// become follower
-					if isEmptyAppendRPC(m) {
-						if m.Term >= r.Term {
-							r.becomeFollower(m.Term, m.From)
-						}
+					if m.Term >= r.Term {
+						r.becomeFollower(m.Term, m.From)
 					}
+
 				}
 			case StateLeader:
 				if m.MsgType == pb.MessageType_MsgHeartbeatResponse {
@@ -581,10 +599,8 @@ func (r *Raft) Step(m pb.Message) error {
 					}
 				} else if m.MsgType == pb.MessageType_MsgAppend {
 					// become follower
-					if isEmptyAppendRPC(m) {
-						if m.Term > r.Term {
-							r.becomeFollower(m.Term, m.From)
-						}
+					if m.Term > r.Term {
+						r.becomeFollower(m.Term, m.From)
 					}
 				}
 			}
@@ -594,7 +610,6 @@ func (r *Raft) Step(m pb.Message) error {
 }
 
 func (r *Raft) createAppendMsg(to uint64, ents []*pb.Entry) {
-	// TODO: send based on peers' progress
 	r.msgs = append(r.msgs, pb.Message{
 		Term:    r.Term,
 		MsgType: pb.MessageType_MsgAppend,
@@ -627,7 +642,7 @@ func (r *Raft) findMatchedIndexAndTerm(to uint64) (uint64, uint64) {
 	ft, err := r.RaftLog.Term(fi)
 	if err != nil {
 		if err == IndexOutOfBounds {
-			return 0, 0
+			return 0, r.Term
 		} else if err == IndexNotExisted {
 			fi = ft
 			ft, _ = r.RaftLog.Term(fi)
@@ -644,10 +659,6 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 	// Your Code Here (2A).
 	switch r.State {
 	case StateFollower:
-		//if r.RaftLog.committed < m.Commit {
-		//	r.RaftLog.AppendApplicationEntries(m.Entries, m.Entries[0].Index, m.LogTerm)
-		//	r.RaftLog.commitEntries(m.Commit)
-		//} else {
 		reject := false
 		if !r.RaftLog.entryExisted(m.Index, m.LogTerm) {
 			// reject
