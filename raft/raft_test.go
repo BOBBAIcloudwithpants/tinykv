@@ -176,7 +176,6 @@ func TestLeaderElectionOverwriteNewerLogs2AB(t *testing.T) {
 	for i := range n.peers {
 		sm := n.peers[i].(*Raft)
 		entries := sm.RaftLog.entries
-		fmt.Printf("#%d, %+v\n", i, entries)
 		if len(entries) != 2 {
 			t.Fatalf("node %d: len(entries) == %d, want 2", i, len(entries))
 		}
@@ -281,7 +280,7 @@ func TestLogReplication2AB(t *testing.T) {
 
 		for j, x := range tt.network.peers {
 			sm := x.(*Raft)
-
+			fmt.Printf("#%d, %+v\n", sm.id, *sm.RaftLog)
 			if sm.RaftLog.committed != tt.wcommitted {
 				t.Errorf("#%d.%d: committed = %d, want %d", i, j, sm.RaftLog.committed, tt.wcommitted)
 			}

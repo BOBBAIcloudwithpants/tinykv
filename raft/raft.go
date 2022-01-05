@@ -253,11 +253,7 @@ func (r *Raft) tick() {
 	} else if r.State == StateCandidate {
 		if winElection(r) {
 			r.becomeLeader()
-			r.Step(pb.Message{
-				MsgType: pb.MessageType_MsgBeat,
-				Term:    r.Term,
-				From:    r.id,
-			})
+			r.appendEmptyLogAfterWinElection()
 		} else if r.electionElapsed > r.randomWaitTime+r.electionTimeout {
 			// current election timeout, retry
 			//fmt.Printf("过期了：%d %d\n", r.electionTimeout + r.randomWaitTime, r.electionTimeout)
@@ -385,11 +381,7 @@ func (r *Raft) Step(m pb.Message) error {
 
 				if winElection(r) {
 					r.becomeLeader()
-					r.Step(pb.Message{
-						MsgType: pb.MessageType_MsgBeat,
-						Term:    r.Term,
-						From:    r.id,
-					})
+					r.appendEmptyLogAfterWinElection()
 				}
 			}
 		} else if m.MsgType == pb.MessageType_MsgBeat {
@@ -404,6 +396,7 @@ func (r *Raft) Step(m pb.Message) error {
 							From:    r.id,
 							To:      k,
 							Term:    r.Term,
+							Commit:  r.RaftLog.committed,
 						})
 					}
 				}
@@ -411,27 +404,28 @@ func (r *Raft) Step(m pb.Message) error {
 		} else if m.MsgType == pb.MessageType_MsgPropose {
 			if r.State == StateLeader && r.id == m.From {
 				ents := m.Entries
-
-				li := r.RaftLog.LastIndex()
-
-				err := r.RaftLog.AppendApplicationEntries(ents, li+1, m.LogTerm)
-				if err != nil {
-					log.Fatal(err.Error())
-					return err
-				}
-
-				for k, _ := range r.Prs {
-					if k != r.id {
-						//if !isEmptyEntries(ents) {
-						//	r.createAppendMsg(k, ents)
-						//} else {
-						//	r.syncWithPeers(k)
-						//}
-						r.syncWithPeers(k)
+				if ents == nil {
+					// inform others
+					for k, _ := range r.Prs {
+						if k != r.id {
+							r.informPeerCommitment(k)
+						}
 					}
-				}
-				if len(r.Prs) == 1 {
-					r.handleCommit(r.RaftLog.LastIndex() + 1)
+				} else {
+					li := r.RaftLog.LastIndex()
+					err := r.RaftLog.AppendApplicationEntries(ents, li+1, m.LogTerm)
+					if err != nil {
+						log.Fatal(err.Error())
+						return err
+					}
+					for k, _ := range r.Prs {
+						if k != r.id {
+							r.syncWithPeers(k)
+						}
+					}
+					if len(r.Prs) == 1 {
+						r.handleCommit(r.RaftLog.LastIndex() + 1)
+					}
 				}
 			}
 		}
@@ -481,9 +475,7 @@ func (r *Raft) Step(m pb.Message) error {
 					if m.Term > r.Term {
 						r.becomeFollower(m.Term, m.From)
 					}
-
 					r.handleAppendEntries(m)
-
 				}
 			case StateCandidate:
 				if m.MsgType == pb.MessageType_MsgRequestVote {
@@ -517,12 +509,8 @@ func (r *Raft) Step(m pb.Message) error {
 						r.votes[m.From] = true
 						if winElection(r) {
 							r.becomeLeader()
-							r.Step(pb.Message{
-								MsgType: pb.MessageType_MsgPropose,
-								Term:    r.Term,
-								From:    r.id,
-
-							})
+							// insert an empty entry
+							r.appendEmptyLogAfterWinElection()
 						}
 					}
 
@@ -586,11 +574,20 @@ func (r *Raft) Step(m pb.Message) error {
 						// check whether the data is received by majority of nodes
 						if !m.Reject {
 							r.received(m.From, m.Index)
+							commitChange := false
+							maxCommitted := uint64(0)
 							for i := r.RaftLog.committed + 1; i <= m.Index; i++ {
 								if r.majorityReceived(i) {
-									r.handleCommit(i)
+									maxCommitted = max(maxCommitted, i)
+									commitChange = true
 								}
 							}
+							// inform followers that the commit is updated
+							if commitChange {
+								r.handleCommit(maxCommitted)
+								r.informCommitment()
+							}
+
 						} else {
 							// retry
 							r.received(m.From, m.Index-1)
@@ -609,16 +606,23 @@ func (r *Raft) Step(m pb.Message) error {
 	return nil
 }
 
-func (r *Raft) createAppendMsg(to uint64, ents []*pb.Entry) {
+func (r *Raft) informCommitment() {
+	r.Step(pb.Message{
+		Term: r.Term,
+		MsgType: pb.MessageType_MsgPropose,
+		From: r.id,
+		Entries: nil,
+	})
+}
+
+func (r *Raft) informPeerCommitment(to uint64) {
 	r.msgs = append(r.msgs, pb.Message{
-		Term:    r.Term,
 		MsgType: pb.MessageType_MsgAppend,
-		From:    r.id,
-		To:      to,
-		Index:   r.RaftLog.committed,
-		Entries: ents,
-		LogTerm: r.Term,
-		Commit:  r.RaftLog.committed,
+		Term: r.Term,
+		From: r.id,
+		To: to,
+		Entries: nil,
+		Commit: r.RaftLog.committed,
 	})
 }
 
@@ -694,7 +698,6 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 
 // handleHeartbeat handle Heartbeat RPC request
 func (r *Raft) handleHeartbeat(m pb.Message) {
-
 	li := r.RaftLog.LastIndex()
 	lt, _ := r.RaftLog.Term(li)
 	r.msgs = append(r.msgs, pb.Message{
@@ -709,11 +712,22 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 	r.electionElapsed = 0
 	//fmt.Printf("handleHeartbeat,从%d到%d: Term变了，id: %d, state: %s, %d -> %d\n",m.From, r.id, r.id, r.State, r.Term, m.Term)
 	r.Term = m.Term
+	r.handleCommit(m.Commit)
 }
 
 func (r *Raft) received(id uint64, match uint64) {
 	r.Prs[id].Match = match
 	r.Prs[id].Next = match + 1
+}
+
+func (r *Raft) appendEmptyLogAfterWinElection() {
+	r.Step(pb.Message{
+		MsgType: pb.MessageType_MsgPropose,
+		Term:    r.Term,
+		From:    r.id,
+		Entries: []*pb.Entry{{Term: r.Term}},
+		LogTerm: r.Term,
+	})
 }
 
 func (r *Raft) majorityReceived(idx uint64) bool {
@@ -731,6 +745,10 @@ func (r *Raft) majorityReceived(idx uint64) bool {
 }
 
 func (r *Raft) handleCommit(c uint64) {
+	if c > r.RaftLog.committed {
+		// TODO: if committed is increased, apply to local state machine
+
+	}
 	r.RaftLog.committed = c
 }
 

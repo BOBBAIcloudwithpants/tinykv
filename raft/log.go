@@ -192,7 +192,7 @@ func (l *RaftLog) loadEntriesFromStorage() {
 // nextEnts returns all the committed but not applied entries
 func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 	// Your Code Here (2A).
-	for _, e := range l.unstableEntries() {
+	for _, e := range l.entries {
 		if e.Index > l.applied && e.Index <= l.committed {
 			ents = append(ents, e)
 		}
@@ -260,7 +260,6 @@ func (l *RaftLog) AppendApplicationEntries(entries []*pb.Entry, firstIndex uint6
 			e.Term = term
 			e.Index = idx
 			e.EntryType = pb.EntryType_EntryNormal
-			//ents = append(ents, *e)
 			l.entries = append(l.entries, *e)
 			l.received[idx] = map[uint64]bool{}
 			idx++
