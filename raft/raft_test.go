@@ -280,7 +280,7 @@ func TestLogReplication2AB(t *testing.T) {
 
 		for j, x := range tt.network.peers {
 			sm := x.(*Raft)
-			fmt.Printf("#%d, %+v\n", sm.id, *sm.RaftLog)
+			//fmt.Printf("#%d, %s ,%+v\n", sm.id, sm.State, *sm.RaftLog)
 			if sm.RaftLog.committed != tt.wcommitted {
 				t.Errorf("#%d.%d: committed = %d, want %d", i, j, sm.RaftLog.committed, tt.wcommitted)
 			}

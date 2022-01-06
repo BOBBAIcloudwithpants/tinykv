@@ -127,13 +127,16 @@ func (l *RaftLog) matchEntriesAndAppend(index uint64, term uint64, entries []*pb
 		}
 	}
 
+	// prepare data
 	ents := make([]pb.Entry, 0, len(entries))
 	for _, e := range entries {
 		ents = append(ents, *e)
 	}
 
+
 	if i == -1 {
 		// no match, just append
+		// index == 0, or index > l.entries[0].index
 		l.entries = append(l.entries, ents...)
 	} else {
 		old_len := len(l.entries)

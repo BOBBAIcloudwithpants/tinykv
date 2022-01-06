@@ -402,7 +402,7 @@ func (r *Raft) Step(m pb.Message) error {
 				}
 			}
 		} else if m.MsgType == pb.MessageType_MsgPropose {
-			if r.State == StateLeader && r.id == m.From {
+			if r.State == StateLeader {
 				ents := m.Entries
 				if ents == nil {
 					// inform others
@@ -413,19 +413,21 @@ func (r *Raft) Step(m pb.Message) error {
 					}
 				} else {
 					li := r.RaftLog.LastIndex()
-					err := r.RaftLog.AppendApplicationEntries(ents, li+1, m.LogTerm)
+					err := r.RaftLog.AppendApplicationEntries(ents, li+1, r.Term)
 					if err != nil {
 						log.Fatal(err.Error())
 						return err
+					}
+					r.received(r.id, r.RaftLog.LastIndex())
+					if len(r.Prs) == 1 {
+						r.handleCommit(r.RaftLog.LastIndex())
 					}
 					for k, _ := range r.Prs {
 						if k != r.id {
 							r.syncWithPeers(k)
 						}
 					}
-					if len(r.Prs) == 1 {
-						r.handleCommit(r.RaftLog.LastIndex() + 1)
-					}
+
 				}
 			}
 		}
@@ -576,6 +578,7 @@ func (r *Raft) Step(m pb.Message) error {
 							r.received(m.From, m.Index)
 							commitChange := false
 							maxCommitted := uint64(0)
+
 							for i := r.RaftLog.committed + 1; i <= m.Index; i++ {
 								if r.majorityReceived(i) {
 									maxCommitted = max(maxCommitted, i)
@@ -621,8 +624,9 @@ func (r *Raft) informPeerCommitment(to uint64) {
 		Term: r.Term,
 		From: r.id,
 		To: to,
-		Entries: nil,
+		//Entries: []*pb.Entry{{Data: nil}},
 		Commit: r.RaftLog.committed,
+
 	})
 }
 
@@ -734,21 +738,20 @@ func (r *Raft) majorityReceived(idx uint64) bool {
 	recv := 0
 	t, err := r.RaftLog.Term(idx)
 	isInTerm := err != nil || t == r.Term
-	for k, v := range r.Prs {
+	for _, v := range r.Prs {
 		//fmt.Printf("PEER: %d，Match：%d\n",  k, v.Match)
-		if k != r.id && idx <= v.Match {
+		if idx <= v.Match {
 			recv++
 		}
 	}
-	//fmt.Printf("收到：%d, len: %d\n", recv, len(r.Prs))
-	return isInTerm && 2*(recv+1) >= len(r.Prs)
+	return isInTerm && 2*recv >= len(r.Prs)
 }
 
 func (r *Raft) handleCommit(c uint64) {
 	if c > r.RaftLog.committed {
 		// TODO: if committed is increased, apply to local state machine
-
 	}
+	r.received(r.id, c)
 	r.RaftLog.committed = c
 }
 
