@@ -136,6 +136,9 @@ type Raft struct {
 	// current vote number
 	VoteNum uint64
 
+	// has vote
+	VoteTerm uint64
+
 	// heartbeat interval, should send
 	heartbeatTimeout int
 	// baseline of election interval
@@ -208,9 +211,20 @@ func newRaft(c *Config) *Raft {
 	r.VoteNum = 0
 	r.RaftLog = newLog(c.Storage)
 	r.received(r.id, r.RaftLog.LastIndex())
-
+	hs, _, _ := r.RaftLog.storage.InitialState()
+	r.setHardState(hs)
 
 	return r
+}
+
+func (r *Raft)setHardState(hs pb.HardState) {
+	if hs.Term != 0 {
+		r.Term = hs.Term
+	}
+	if hs.Vote != 0 {
+		r.Vote = hs.Vote
+		r.VoteTerm = hs.Term
+	}
 }
 
 // sendAppend sends an append RPC with new entries (if any) and the
@@ -307,6 +321,7 @@ func (r *Raft) becomeCandidate() {
 	r.State = StateCandidate
 	r.electionElapsed = 0
 	r.Term++
+	r.VoteTerm = r.Term
 	// vote for myself
 	for k, _ := range r.votes {
 		r.votes[k] = false
@@ -330,6 +345,8 @@ func (r *Raft) becomeLeader() {
 	r.electionElapsed = 0
 	r.heartbeatElapsed = 0
 	r.VoteNum = 0
+	r.VoteTerm = r.Term
+
 	for k, _ := range r.votes {
 		r.votes[k] = false
 	}
@@ -361,6 +378,7 @@ func (r *Raft) Step(m pb.Message) error {
 					}
 				}
 			} else {
+
 				//r.Term++
 				r.becomeCandidate()
 				// candidate send RequestVote
@@ -448,21 +466,18 @@ func (r *Raft) Step(m pb.Message) error {
 				} else if m.MsgType == pb.MessageType_MsgRequestVote {
 					// vote for candidate
 					rej := false
-					if r.Term >= m.Term {
-						rej = true
-					}
-					if r.Vote != 0 && r.Vote != m.From {
-						rej = true
-					}
-					if !r.RaftLog.isLogNewer(m.Index, m.LogTerm) {
-						rej = true
+					if r.Vote != 0 && r.VoteTerm == 0 {
+						r.VoteTerm = r.Term
 					}
 
+					if m.Term < r.Term || (r.Vote != 0 && r.Vote != m.From && r.VoteTerm == m.Term) || !r.RaftLog.isLogNewer(m.Index, m.LogTerm) {
+						rej = true
+					}
 
 					if !rej {
-						//fmt.Printf("MessageType_MsgRequestVote,从%d到%d, Term变了，id: %d, state: %s, %d -> %d\n",m.From,r.id, r.id, r.State, r.Term, m.Term)
 						r.Vote = m.From
 						r.Term = m.Term
+						r.VoteTerm = m.Term
 					}
 					r.electionElapsed = 0
 					r.msgs = append(r.msgs, pb.Message{
@@ -474,7 +489,7 @@ func (r *Raft) Step(m pb.Message) error {
 					})
 				} else if m.MsgType == pb.MessageType_MsgAppend {
 
-					if m.Term > r.Term {
+					if m.Term >= r.Term {
 						r.becomeFollower(m.Term, m.From)
 					}
 					r.handleAppendEntries(m)
@@ -507,9 +522,11 @@ func (r *Raft) Step(m pb.Message) error {
 				} else if m.MsgType == pb.MessageType_MsgRequestVoteResponse {
 					// check other's vote
 					r.VoteNum++
+					//fmt.Printf("#%d: %t\n", m.From, m.Reject)
 					if m.Reject == false {
 						r.votes[m.From] = true
 						if winElection(r) {
+							//fmt.Printf("wins: %d\n", r.id)
 							r.becomeLeader()
 							// insert an empty entry
 							r.appendEmptyLogAfterWinElection()
@@ -517,6 +534,7 @@ func (r *Raft) Step(m pb.Message) error {
 					}
 
 					if int(r.VoteNum) == len(r.votes) && !winElection(r){
+						//fmt.Printf("failed: %d\n", r.id)
 						// election has end, the candidate lose
 						r.becomeFollower(m.Term, m.From)
 					}

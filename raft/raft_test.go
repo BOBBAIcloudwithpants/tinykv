@@ -333,6 +333,7 @@ func TestCommitWithoutNewTermEntry2AB(t *testing.T) {
 	tt.send(pb.Message{From: 1, To: 1, MsgType: pb.MessageType_MsgPropose, Entries: []*pb.Entry{{Data: []byte("some data")}}})
 
 	sm := tt.peers[1].(*Raft)
+
 	if sm.RaftLog.committed != 1 {
 		t.Errorf("committed = %d, want %d", sm.RaftLog.committed, 1)
 	}
@@ -343,8 +344,8 @@ func TestCommitWithoutNewTermEntry2AB(t *testing.T) {
 	// elect 2 as the new leader with term 2
 	// after append a ChangeTerm entry from the current term, all entries
 	// should be committed
-	tt.send(pb.Message{From: 2, To: 2, MsgType: pb.MessageType_MsgHup})
 
+	tt.send(pb.Message{From: 2, To: 2, MsgType: pb.MessageType_MsgHup})
 	if sm.RaftLog.committed != 4 {
 		t.Errorf("committed = %d, want %d", sm.RaftLog.committed, 4)
 	}
