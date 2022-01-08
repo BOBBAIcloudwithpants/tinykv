@@ -217,7 +217,7 @@ func newRaft(c *Config) *Raft {
 	return r
 }
 
-func (r *Raft)setHardState(hs pb.HardState) {
+func (r *Raft) setHardState(hs pb.HardState) {
 	if hs.Term != 0 {
 		r.Term = hs.Term
 	}
@@ -378,7 +378,7 @@ func (r *Raft) Step(m pb.Message) error {
 					}
 				}
 			} else {
-
+				//fmt.Printf("#%d 开始选举\n", r.id)
 				//r.Term++
 				r.becomeCandidate()
 				// candidate send RequestVote
@@ -474,6 +474,10 @@ func (r *Raft) Step(m pb.Message) error {
 						rej = true
 					}
 
+					// update term if needed
+					if m.Term > r.Term {
+						r.becomeFollower(m.Term, m.From)
+					}
 					if !rej {
 						r.Vote = m.From
 						r.Term = m.Term
@@ -488,10 +492,7 @@ func (r *Raft) Step(m pb.Message) error {
 						Term:    r.Term,
 					})
 				} else if m.MsgType == pb.MessageType_MsgAppend {
-
-					if m.Term >= r.Term {
-						r.becomeFollower(m.Term, m.From)
-					}
+					r.becomeFollower(m.Term, m.From)
 					r.handleAppendEntries(m)
 				}
 			case StateCandidate:
@@ -533,10 +534,10 @@ func (r *Raft) Step(m pb.Message) error {
 						}
 					}
 
-					if int(r.VoteNum) == len(r.votes) && !winElection(r){
+					if int(r.VoteNum) == len(r.votes) && !winElection(r) {
 						//fmt.Printf("failed: %d\n", r.id)
 						// election has end, the candidate lose
-						r.becomeFollower(m.Term, m.From)
+						r.becomeFollower(r.Term, m.From)
 					}
 
 				} else if m.MsgType == pb.MessageType_MsgHeartbeat {
@@ -556,8 +557,8 @@ func (r *Raft) Step(m pb.Message) error {
 					// become follower
 					if m.Term >= r.Term {
 						r.becomeFollower(m.Term, m.From)
+						r.handleAppendEntries(m)
 					}
-
 				}
 			case StateLeader:
 				if m.MsgType == pb.MessageType_MsgHeartbeatResponse {
@@ -567,18 +568,25 @@ func (r *Raft) Step(m pb.Message) error {
 					r.received(m.From, m.Index)
 
 				} else if m.MsgType == pb.MessageType_MsgRequestVote {
-					if m.Term > r.Term {
-						// become other's follower & vote for others
-						r.becomeFollower(m.Term, m.From)
-						r.Vote = m.From
-						r.msgs = append(r.msgs, pb.Message{
-							MsgType: pb.MessageType_MsgRequestVoteResponse,
-							From:    r.id,
-							To:      m.From,
-							Reject:  false,
-							Term:    m.Term,
-						})
+					reject := false
+					if r.Term > m.Term || !r.RaftLog.isLogNewer(m.Index, m.LogTerm) {
+						reject = true
 					}
+					// become other's follower & vote for others
+					if m.Term > r.Term {
+						r.becomeFollower(m.Term, m.From)
+					}
+					if !reject {
+						r.Vote = m.From
+						r.VoteTerm = m.Term
+					}
+					r.msgs = append(r.msgs, pb.Message{
+						MsgType: pb.MessageType_MsgRequestVoteResponse,
+						From:    r.id,
+						To:      m.From,
+						Reject:  reject,
+						Term:    m.Term,
+					})
 				} else if m.MsgType == pb.MessageType_MsgAppendResponse {
 					if m.Term > r.Term {
 						r.becomeFollower(m.Term, m.From)
@@ -629,9 +637,9 @@ func (r *Raft) Step(m pb.Message) error {
 
 func (r *Raft) informCommitment() {
 	r.Step(pb.Message{
-		Term: r.Term,
+		Term:    r.Term,
 		MsgType: pb.MessageType_MsgPropose,
-		From: r.id,
+		From:    r.id,
 		Entries: nil,
 	})
 }
@@ -639,12 +647,11 @@ func (r *Raft) informCommitment() {
 func (r *Raft) informPeerCommitment(to uint64) {
 	r.msgs = append(r.msgs, pb.Message{
 		MsgType: pb.MessageType_MsgAppend,
-		Term: r.Term,
-		From: r.id,
-		To: to,
+		Term:    r.Term,
+		From:    r.id,
+		To:      to,
 		//Entries: []*pb.Entry{{Data: nil}},
 		Commit: r.RaftLog.committed,
-
 	})
 }
 

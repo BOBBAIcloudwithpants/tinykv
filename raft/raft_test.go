@@ -395,7 +395,6 @@ func TestDuelingCandidates2AB(t *testing.T) {
 	if sm.State != StateLeader {
 		t.Errorf("state = %s, want %s", sm.State, StateLeader)
 	}
-
 	// 3 stays as candidate since it receives a vote from 3 and a rejection from 2
 	sm = nt.peers[3].(*Raft)
 	if sm.State != StateCandidate {

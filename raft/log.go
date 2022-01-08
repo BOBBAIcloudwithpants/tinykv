@@ -86,25 +86,19 @@ func (l *RaftLog) entryExisted(idx uint64, logTerm uint64) bool{
 }
 
 func (l *RaftLog) isLogNewer(index uint64, term uint64) bool {
+
 	if len(l.entries) == 0 {
 		return true
 	}
-	ct, err := l.Term(index)
-	if err != nil {
-		if err == IndexOutOfBounds {
-			return false
-		} else if err == IndexNotExisted {
-			// index > lastIndex
-			t, _ := l.Term(l.LastIndex())
-			return term >= t
-		}
+	li := l.LastIndex()
+	lt, _ := l.Term(li)
+	//fmt.Printf("li: %d, lt: %d, index: %d, term: %d\n", li, lt, index, term)
+	if lt > term {
+		return false
+	} else if lt == term {
+		return index >= li
 	}
-	if ct != term {
-		return term > ct
-	}
-
-	return index >= l.LastIndex()
-
+	return true
 }
 
 func (l *RaftLog) matchEntriesAndAppend(index uint64, term uint64, entries []*pb.Entry) {
