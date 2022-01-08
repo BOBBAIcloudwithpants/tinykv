@@ -252,9 +252,7 @@ func (r *Raft) sendHeartbeat(to uint64) {
 // tick advances the internal logical clock by a single tick.
 func (r *Raft) tick() {
 	r.electionElapsed++
-	if r.Term == 0 {
-		r.Term = 1
-	}
+
 	if r.State == StateFollower {
 		if r.electionElapsed >= r.electionTimeout+r.randomWaitTime {
 			// timeout, transfer state into StateCandidate
@@ -267,7 +265,6 @@ func (r *Raft) tick() {
 	} else if r.State == StateCandidate {
 		if winElection(r) {
 			r.becomeLeader()
-			r.appendEmptyLogAfterWinElection()
 		} else if r.electionElapsed > r.randomWaitTime+r.electionTimeout {
 			// current election timeout, retry
 			//fmt.Printf("过期了：%d %d\n", r.electionTimeout + r.randomWaitTime, r.electionTimeout)
@@ -353,6 +350,7 @@ func (r *Raft) becomeLeader() {
 
 	// clear message
 	r.msgs = make([]pb.Message, 0)
+	r.appendEmptyLogAfterWinElection()
 
 }
 
@@ -399,7 +397,6 @@ func (r *Raft) Step(m pb.Message) error {
 
 				if winElection(r) {
 					r.becomeLeader()
-					r.appendEmptyLogAfterWinElection()
 				}
 			}
 		} else if m.MsgType == pb.MessageType_MsgBeat {
@@ -416,36 +413,35 @@ func (r *Raft) Step(m pb.Message) error {
 							Term:    r.Term,
 							Commit:  r.RaftLog.committed,
 						})
+						r.syncWithPeers(k)
 					}
 				}
 			}
 		} else if m.MsgType == pb.MessageType_MsgPropose {
 			if r.State == StateLeader {
 				ents := m.Entries
-				if ents == nil {
-					// inform others
-					for k, _ := range r.Prs {
-						if k != r.id {
-							r.informPeerCommitment(k)
-						}
+				//if ents == nil {
+				//	// inform others
+				//	for k, _ := range r.Prs {
+				//		if k != r.id {
+				//			r.informPeerCommitment(k)
+				//		}
+				//	}
+				//} else {
+				li := r.RaftLog.LastIndex()
+				err := r.RaftLog.AppendApplicationEntries(ents, li+1, r.Term)
+				if err != nil {
+					log.Fatal(err.Error())
+					return err
+				}
+				r.received(r.id, r.RaftLog.LastIndex())
+				if len(r.Prs) == 1 {
+					r.handleCommit(r.RaftLog.LastIndex())
+				}
+				for k, _ := range r.Prs {
+					if k != r.id {
+						r.syncWithPeers(k)
 					}
-				} else {
-					li := r.RaftLog.LastIndex()
-					err := r.RaftLog.AppendApplicationEntries(ents, li+1, r.Term)
-					if err != nil {
-						log.Fatal(err.Error())
-						return err
-					}
-					r.received(r.id, r.RaftLog.LastIndex())
-					if len(r.Prs) == 1 {
-						r.handleCommit(r.RaftLog.LastIndex())
-					}
-					for k, _ := range r.Prs {
-						if k != r.id {
-							r.syncWithPeers(k)
-						}
-					}
-
 				}
 			}
 		}
@@ -499,7 +495,7 @@ func (r *Raft) Step(m pb.Message) error {
 				if m.MsgType == pb.MessageType_MsgRequestVote {
 					if m.Term > r.Term {
 						// become other's follower & vote for others
-						r.becomeFollower(m.Term, m.From)
+						r.becomeFollower(m.Term, None)
 						r.Vote = m.From
 						r.msgs = append(r.msgs, pb.Message{
 							MsgType: pb.MessageType_MsgRequestVoteResponse,
@@ -530,7 +526,6 @@ func (r *Raft) Step(m pb.Message) error {
 							//fmt.Printf("wins: %d\n", r.id)
 							r.becomeLeader()
 							// insert an empty entry
-							r.appendEmptyLogAfterWinElection()
 						}
 					}
 
@@ -650,13 +645,14 @@ func (r *Raft) informPeerCommitment(to uint64) {
 		Term:    r.Term,
 		From:    r.id,
 		To:      to,
-		//Entries: []*pb.Entry{{Data: nil}},
 		Commit: r.RaftLog.committed,
 	})
 }
 
 func (r *Raft) syncWithPeers(to uint64) {
-
+	//if r.RaftLog.LastIndex() == 0 && r.RaftLog.committed == 0 {
+	//	return
+	//}
 	i, t := r.findMatchedIndexAndTerm(to)
 	r.msgs = append(r.msgs, pb.Message{
 		Term:    r.Term,
@@ -698,10 +694,13 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 			reject = true
 		}
 		if !reject {
-			r.RaftLog.matchEntriesAndAppend(m.Index, m.LogTerm, m.Entries)
-
+			lastUpdate := r.RaftLog.matchEntriesAndAppend(m.Index, m.LogTerm, m.Entries)
 			if m.Commit > r.RaftLog.committed {
-				r.RaftLog.commitEntries(min(r.RaftLog.LastIndex(), m.Commit))
+				if m.Index == 0 && m.LogTerm == 0 {
+					r.handleCommit(m.Commit)
+				} else {
+					r.handleCommit(min(lastUpdate, m.Commit))
+				}
 			}
 			r.Term = m.Term
 		}
@@ -741,7 +740,7 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 	r.electionElapsed = 0
 	//fmt.Printf("handleHeartbeat,从%d到%d: Term变了，id: %d, state: %s, %d -> %d\n",m.From, r.id, r.id, r.State, r.Term, m.Term)
 	r.Term = m.Term
-	r.handleCommit(m.Commit)
+	//r.handleCommit(m.Commit)
 }
 
 func (r *Raft) received(id uint64, match uint64) {

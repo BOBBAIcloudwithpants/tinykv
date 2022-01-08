@@ -129,10 +129,6 @@ func mustTemp(pre, body string) string {
 	return f.Name()
 }
 
-func isEmptyEntry(e *pb.Entry) bool{
-	return e.Data == nil && e.Term == 0 && e.Index == 0
-}
-
 func ltoa(l *RaftLog) string {
 	s := fmt.Sprintf("committed: %d\n", l.committed)
 	s += fmt.Sprintf("applied:  %d\n", l.applied)
