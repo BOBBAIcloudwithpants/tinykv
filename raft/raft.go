@@ -476,7 +476,7 @@ func (r *Raft) Step(m pb.Message) error {
 
 					// update term if needed
 					if m.Term > r.Term {
-						r.becomeFollower(m.Term, m.From)
+						r.becomeFollower(m.Term, None)
 					}
 					if !rej {
 						r.Vote = m.From
@@ -569,12 +569,12 @@ func (r *Raft) Step(m pb.Message) error {
 
 				} else if m.MsgType == pb.MessageType_MsgRequestVote {
 					reject := false
-					if r.Term > m.Term || !r.RaftLog.isLogNewer(m.Index, m.LogTerm) {
+					if r.Term >= m.Term || !r.RaftLog.isLogNewer(m.Index, m.LogTerm) {
 						reject = true
 					}
 					// become other's follower & vote for others
 					if m.Term > r.Term {
-						r.becomeFollower(m.Term, m.From)
+						r.becomeFollower(m.Term, None)
 					}
 					if !reject {
 						r.Vote = m.From
@@ -699,9 +699,9 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		}
 		if !reject {
 			r.RaftLog.matchEntriesAndAppend(m.Index, m.LogTerm, m.Entries)
-			r.RaftLog.commitEntries(m.Commit)
-			if m.Index != 0 && m.LogTerm != 0 {
-				//r.RaftLog.applyEntries(r.RaftLog.LastIndex())
+
+			if m.Commit > r.RaftLog.committed {
+				r.RaftLog.commitEntries(min(r.RaftLog.LastIndex(), m.Commit))
 			}
 			r.Term = m.Term
 		}

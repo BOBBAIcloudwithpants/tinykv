@@ -104,12 +104,6 @@ func (l *RaftLog) isLogNewer(index uint64, term uint64) bool {
 func (l *RaftLog) matchEntriesAndAppend(index uint64, term uint64, entries []*pb.Entry) {
 
 	if len(entries) == 0 {
-		for i := len(l.entries) - 1; i >= 0; i-- {
-			if index == l.entries[i].Index && term == l.entries[i].Term{
-				l.entries = l.entries[:i+1]
-				break
-			}
-		}
 		return
 	}
 
