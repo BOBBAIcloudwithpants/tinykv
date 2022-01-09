@@ -183,12 +183,19 @@ func newRaft(c *Config) *Raft {
 	for _, p := range c.peers {
 		r.votes[p] = false
 	}
+	if c.peers == nil {
+		r.votes[r.id] = false
+	}
 
 	// init Progress
 	r.Prs = make(map[uint64]*Progress)
 	for _, p := range c.peers {
 		r.Prs[p] = new(Progress)
 		r.Prs[p].Match, r.Prs[p].Next = 0, 1
+	}
+	if c.peers == nil {
+		r.Prs[r.id] = new(Progress)
+		r.Prs[r.id].Match, r.Prs[r.id].Next = 0, 1
 	}
 
 	//fmt.Println("初始化之后：")
@@ -224,6 +231,9 @@ func (r *Raft) setHardState(hs pb.HardState) {
 	if hs.Vote != 0 {
 		r.Vote = hs.Vote
 		r.VoteTerm = hs.Term
+	}
+	if hs.Commit != 0 {
+		r.RaftLog.committed = hs.Commit
 	}
 }
 
@@ -737,8 +747,10 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 }
 
 func (r *Raft) received(id uint64, match uint64) {
-	r.Prs[id].Match = match
-	r.Prs[id].Next = match + 1
+	if r.Prs != nil && r.Prs[id] != nil{
+		r.Prs[id].Match = match
+		r.Prs[id].Next = match + 1
+	}
 }
 
 func (r *Raft) appendEmptyLogAfterWinElection() {

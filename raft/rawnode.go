@@ -146,20 +146,36 @@ func (rn *RawNode) Step(m pb.Message) error {
 // Ready returns the current point-in-time state of this RawNode.
 func (rn *RawNode) Ready() Ready {
 	// Your Code Here (2A).
+	var ss *SoftState
+	var hs pb.HardState
+	if rn.isUpdated(){
+		rn.setSoftState(&ss)
+		rn.setHardState(&hs)
+	}
 	return Ready{
-		SoftState: &SoftState{
-			Lead: rn.Raft.Lead,
-			RaftState: rn.Raft.State,
-		},
-		HardState: pb.HardState{
-			Term: rn.Raft.Term,
-			Vote: rn.Raft.Vote,
-			Commit: rn.Raft.RaftLog.committed,
-		},
+		SoftState: ss,
+		HardState: hs,
 		Entries: rn.Raft.RaftLog.unstableEntries(),
 		CommittedEntries: rn.Raft.RaftLog.nextEnts(),
 		Messages: rn.Raft.msgs,
 	}
+}
+
+func (rn *RawNode) isUpdated() bool {
+	// there is unstable entries
+	return len(rn.Raft.RaftLog.unstableEntries()) > 0
+}
+
+func (rn *RawNode) setSoftState(ss **SoftState) {
+	*ss = new(SoftState)
+	(*ss).Lead = rn.Raft.Lead
+	(*ss).RaftState = rn.Raft.State
+}
+
+func (rn *RawNode) setHardState(hs *pb.HardState) {
+	hs.Term = rn.Raft.Term
+	hs.Vote = rn.Raft.Vote
+	hs.Commit = rn.Raft.RaftLog.committed
 }
 
 // HasReady called when RawNode user need to check if any Ready pending.

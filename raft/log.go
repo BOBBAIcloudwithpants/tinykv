@@ -292,10 +292,3 @@ func (l *RaftLog) hasReady() bool {
 	return l.Stabled() < l.LastIndex() || l.applied < l.committed
 }
 
-//func (l *RaftLog) Received(index uint64, id uint64) {
-//	l.received[index][id] = true
-//}
-//
-//func (l *RaftLog) MajorityReceived(index uint64, total uint64) bool {
-//	return uint64(2 * len(l.received[index])) > total
-//}
