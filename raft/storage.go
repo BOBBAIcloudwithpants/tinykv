@@ -70,6 +70,8 @@ type Storage interface {
 	Snapshot() (pb.Snapshot, error)
 
 	Append(entries []pb.Entry) error
+
+	Clear()
 }
 
 // MemoryStorage implements the Storage interface backed by an
@@ -126,6 +128,10 @@ func (ms *MemoryStorage) Entries(lo, hi uint64) ([]pb.Entry, error) {
 		return nil, ErrUnavailable
 	}
 	return ents, nil
+}
+
+func (ms *MemoryStorage) Clear() {
+	ms.ents = make([]pb.Entry, 1)
 }
 
 // Term implements the Storage interface.

@@ -125,6 +125,7 @@ func (l *RaftLog) matchEntriesAndAppend(index uint64, term uint64, entries []*pb
 	if i == -1 {
 		// no match, just append
 		// index == 0, or index > l.entries[0].index
+
 		l.entries = append(l.entries, ents...)
 	} else {
 		old_len := len(l.entries)
@@ -134,6 +135,13 @@ func (l *RaftLog) matchEntriesAndAppend(index uint64, term uint64, entries []*pb
 				break
 			}
 			if e.Term != l.entries[i].Term {
+				// modify stable storage
+				if i == 0 {
+					// clear storage
+					l.storage.Clear()
+				} else {
+					l.storage.Append(l.entries[:i])
+				}
 				// cover
 				l.stabled = l.entries[i].Index - 1
 				l.entries = append(l.entries[:i], ents[k:]...)
@@ -142,6 +150,8 @@ func (l *RaftLog) matchEntriesAndAppend(index uint64, term uint64, entries []*pb
 			i++
 		}
 	}
+
+	// write new stabled entries back
 	return l.LastIndex()
 	// cover the entry at pos i+1
 }
@@ -156,18 +166,19 @@ func (l *RaftLog) maybeCompact() {
 // unstableEntries return all the unstable entries
 func (l *RaftLog) unstableEntries() []pb.Entry {
 	// Your Code Here (2A).
-	if len(l.entries) > 0 && l.entries[0].Data == nil && l.entries[0].Index == 0 {
-		// skip noop entry
-		l.entries = l.entries[1:]
-	}
 	ents := l.entries
 	i := 0
+
+	// check if stabled needs update
+	li, _ := l.storage.LastIndex()
+	if l.stabled != li {
+		l.stabled, _ = l.storage.LastIndex()
+	}
 	for ; i < len(ents); i++ {
 		if l.entries[i].Index > l.stabled {
 			break
 		}
 	}
-
 	return ents[i:]
 }
 
@@ -256,16 +267,6 @@ func (l *RaftLog) AppendApplicationEntries(entries []*pb.Entry, firstIndex uint6
 
 	}
 	return nil
-
-	//err := l.storage.Append(ents)
-	//l.applied = idx - 1
-	//l.committed, _ = l.storage.LastIndex()
-	//if err == nil {
-	//	// new entries become stable
-	//	l.applied = l.committed
-	//} else {
-	//	l.applied
-	//}
 }
 
 func (l *RaftLog) commitEntries(committed uint64) {
