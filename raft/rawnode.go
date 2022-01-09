@@ -16,6 +16,7 @@ package raft
 
 import (
 	"errors"
+	"fmt"
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
 
@@ -164,12 +165,17 @@ func (rn *RawNode) Ready() Ready {
 // HasReady called when RawNode user need to check if any Ready pending.
 func (rn *RawNode) HasReady() bool {
 	// Your Code Here (2A).
-	return true
+	return rn.Raft.hasReady()
 }
 
 // Advance notifies the RawNode that the application has applied and saved progress in the
 // last Ready results.
 func (rn *RawNode) Advance(rd Ready) {
+	rn.Raft.RaftLog.applyEntries(rd.CommittedEntries)
+	err := rn.Raft.RaftLog.saveUnstableEntries(rd.Entries)
+	if err != nil {
+		fmt.Println(err)
+	}
 	// Your Code Here (2A).
 }
 

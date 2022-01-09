@@ -166,20 +166,9 @@ func (l *RaftLog) maybeCompact() {
 // unstableEntries return all the unstable entries
 func (l *RaftLog) unstableEntries() []pb.Entry {
 	// Your Code Here (2A).
-	ents := l.entries
-	i := 0
-
 	// check if stabled needs update
-	li, _ := l.storage.LastIndex()
-	if l.stabled != li {
-		l.stabled, _ = l.storage.LastIndex()
-	}
-	for ; i < len(ents); i++ {
-		if l.entries[i].Index > l.stabled {
-			break
-		}
-	}
-	return ents[i:]
+
+	return l.entries[l.Stabled() - l.FirstIndex() + 1:]
 }
 
 func (l *RaftLog) loadEntriesFromStorage() {
@@ -194,12 +183,7 @@ func (l *RaftLog) loadEntriesFromStorage() {
 // nextEnts returns all the committed but not applied entries
 func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 	// Your Code Here (2A).
-	for _, e := range l.entries {
-		if e.Index > l.applied && e.Index <= l.committed {
-			ents = append(ents, e)
-		}
-	}
-	return ents
+	return l.entries[l.applied-l.FirstIndex()+1:l.committed-l.FirstIndex()+1]
 }
 
 // LastIndex return the last index of the log entries
@@ -209,6 +193,22 @@ func (l *RaftLog) LastIndex() uint64 {
 		return 0
 	}
 	return l.entries[len(l.entries)-1].Index
+}
+
+func (l *RaftLog) FirstIndex() uint64 {
+	// Your Code Here (2A).
+	if len(l.entries) == 0 {
+		return 0
+	}
+	return l.entries[0].Index
+}
+
+func (l *RaftLog) Stabled() uint64 {
+	li, _ := l.storage.LastIndex()
+	if l.stabled != li {
+		l.stabled, _ = l.storage.LastIndex()
+	}
+	return l.stabled
 }
 
 // Term return the term of the entry in the given index
@@ -273,8 +273,23 @@ func (l *RaftLog) commitEntries(committed uint64) {
 	l.committed = committed
 }
 
-func (l *RaftLog) applyEntries(a uint64) {
-	l.applied = a
+func (l *RaftLog) applyEntries(entries []pb.Entry) {
+	if len(entries) > 0 {
+		// apply the entries
+		li := entries[len(entries) - 1].Index
+		l.applied = li
+	}
+}
+
+func (l *RaftLog) saveUnstableEntries(entries []pb.Entry) error{
+	if len(entries) > 0 {
+		return l.storage.Append(entries)
+	}
+	return nil
+}
+
+func (l *RaftLog) hasReady() bool {
+	return l.Stabled() < l.LastIndex() || l.applied < l.committed
 }
 
 //func (l *RaftLog) Received(index uint64, id uint64) {

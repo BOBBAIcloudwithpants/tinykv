@@ -413,21 +413,14 @@ func (r *Raft) Step(m pb.Message) error {
 							Term:    r.Term,
 							Commit:  r.RaftLog.committed,
 						})
-						r.syncWithPeers(k)
+						//r.syncWithPeers(k)
 					}
 				}
 			}
 		} else if m.MsgType == pb.MessageType_MsgPropose {
 			if r.State == StateLeader {
 				ents := m.Entries
-				//if ents == nil {
-				//	// inform others
-				//	for k, _ := range r.Prs {
-				//		if k != r.id {
-				//			r.informPeerCommitment(k)
-				//		}
-				//	}
-				//} else {
+
 				li := r.RaftLog.LastIndex()
 				err := r.RaftLog.AppendApplicationEntries(ents, li+1, r.Term)
 				if err != nil {
@@ -740,7 +733,7 @@ func (r *Raft) handleHeartbeat(m pb.Message) {
 	r.electionElapsed = 0
 	//fmt.Printf("handleHeartbeat,从%d到%d: Term变了，id: %d, state: %s, %d -> %d\n",m.From, r.id, r.id, r.State, r.Term, m.Term)
 	r.Term = m.Term
-	//r.handleCommit(m.Commit)
+	r.handleCommit(m.Commit)
 }
 
 func (r *Raft) received(id uint64, match uint64) {
@@ -777,6 +770,10 @@ func (r *Raft) handleCommit(c uint64) {
 	}
 	r.received(r.id, c)
 	r.RaftLog.committed = c
+}
+
+func (r *Raft) hasReady() bool {
+	return len(r.msgs) > 0 || r.RaftLog.hasReady()
 }
 
 // handleSnapshot handle Snapshot RPC request
